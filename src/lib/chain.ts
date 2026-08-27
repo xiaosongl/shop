@@ -19,14 +19,68 @@ import type { Asset } from './crypto'
  * 所以那两条链返回 manual 交人工核，不会误放行。
  */
 
+/**
+ * 判定原因。文案不写进判定里：同一个结论，客户看的是英文付款页，
+ * 运营看的是中文后台，共用一句话必然有一边看不懂。两种语言并排放着，
+ * 加原因时不会只写一半。
+ */
+export const REASON_COPY = {
+  badAmount: {
+    en: 'The amount on this order looks wrong. Please contact us before sending anything.',
+    zh: '订单金额异常，别放行，先联系客户',
+  },
+  wrongToken: {
+    en: 'That transaction sent a different coin than the one this order is priced in.',
+    zh: '转的不是我们要收的那个代币',
+  },
+  wrongAddress: {
+    en: 'That transaction did not go to the address shown on this order.',
+    zh: '这笔交易没有转到我们的收款地址',
+  },
+  short: {
+    en: 'That transaction is for less than the amount due on this order.',
+    zh: '转账金额少于应付金额',
+  },
+  tooEarly: {
+    en: 'That transaction happened before this order was placed, so it cannot belong to it.',
+    zh: '这笔转账发生在下单之前，不属于这个订单',
+  },
+  failed: {
+    en: 'That transaction failed on-chain — nothing was transferred.',
+    zh: '这笔交易在链上执行失败了',
+  },
+  badWallet: {
+    en: 'Our receiving address is misconfigured. Please contact us before sending anything.',
+    zh: '我们自己的收款地址配错了，先去收款配置页改',
+  },
+  unconfirmed: {
+    en: 'Waiting for the network to confirm your transaction.',
+    zh: '等待区块确认',
+  },
+  noTime: {
+    en: 'Confirming when your transaction landed on-chain.',
+    zh: '正在确认这笔转账的上链时间',
+  },
+  notFound: {
+    en: "We can't see that transaction on-chain yet — we'll keep checking.",
+    zh: '链上还查不到这笔交易',
+  },
+  manual: {
+    en: 'Our team verifies this network by hand, usually within a few minutes.',
+    zh: '这条链不自动核验，需要人工去链上对一遍',
+  },
+} as const satisfies Record<string, { en: string; zh: string }>
+
+export type Reason = keyof typeof REASON_COPY
+
 export type Verdict =
   | { state: 'paid' }
   /** 链上还没确认到位，等一会儿再查 */
-  | { state: 'pending'; message: string }
+  | { state: 'pending'; reason: Reason }
   /** 明确对不上，绝不放行 */
-  | { state: 'rejected'; message: string }
+  | { state: 'rejected'; reason: Reason }
   /** 这条链不自动核，留给人工 */
-  | { state: 'manual'; message: string }
+  | { state: 'manual'; reason: Reason }
 
 const TIMEOUT = 8000
 
@@ -91,19 +145,15 @@ const CLOCK_SKEW = 2 * 60 * 60 * 1000
  */
 export function judge(facts: Facts): Verdict {
   // 应收为 0 说明订单数据不对，绝不能因此白送
-  if (facts.expected <= 0n) return { state: 'rejected', message: '订单金额异常，请联系客服' }
-  if (!facts.contractOk) return { state: 'rejected', message: '转的不是我们要收的那个代币' }
-  if (!facts.toUs) return { state: 'rejected', message: '这笔交易没有转到我们的收款地址' }
-  if (facts.received < facts.expected) {
-    return { state: 'rejected', message: '转账金额少于应付金额' }
-  }
+  if (facts.expected <= 0n) return { state: 'rejected', reason: 'badAmount' }
+  if (!facts.contractOk) return { state: 'rejected', reason: 'wrongToken' }
+  if (!facts.toUs) return { state: 'rejected', reason: 'wrongAddress' }
+  if (facts.received < facts.expected) return { state: 'rejected', reason: 'short' }
   // 金额地址都对，只是还没确认——等，别拒
-  if (!facts.confirmed) return { state: 'pending', message: '等待区块确认' }
+  if (!facts.confirmed) return { state: 'pending', reason: 'unconfirmed' }
   // 已进块却拿不到时间，就没法判断它属不属于这一单，只能等下一轮
-  if (!facts.at) return { state: 'pending', message: '正在确认这笔转账的时间' }
-  if (facts.at < facts.notBefore - CLOCK_SKEW) {
-    return { state: 'rejected', message: '这笔转账发生在下单之前，不属于这个订单' }
-  }
+  if (!facts.at) return { state: 'pending', reason: 'noTime' }
+  if (facts.at < facts.notBefore - CLOCK_SKEW) return { state: 'rejected', reason: 'tooEarly' }
   return { state: 'paid' }
 }
 
@@ -171,7 +221,7 @@ async function verifyEsplora(
     })
   }
 
-  return { state: 'pending', message: '链上还查不到这笔交易' }
+  return { state: 'pending', reason: 'notFound' }
 }
 
 // ---------- Tron ----------
@@ -217,12 +267,10 @@ async function verifyTron(
     }[]
   } | null
 
-  if (!body?.data?.length) {
-    return { state: 'pending', message: '还没看到这笔转账到账，确认后会自动放行' }
-  }
+  if (!body?.data?.length) return { state: 'pending', reason: 'notFound' }
 
   const us = tronAddressToHex(address)
-  if (!us) return { state: 'rejected', message: '收款地址配置有误，请联系客服' }
+  if (!us) return { state: 'rejected', reason: 'badWallet' }
 
   // 一笔交易里可能有多个 Transfer（比如经过兑换）。合约和收款方分开判，
   // 这样拒绝时能说准是「转错币」还是「转错地址」。
@@ -286,8 +334,8 @@ async function verifySolana(
   } | null
 
   const meta = body?.result?.meta
-  if (!meta) return { state: 'pending', message: '交易还未最终确认' }
-  if (meta.err) return { state: 'rejected', message: '这笔交易在链上失败了' }
+  if (!meta) return { state: 'pending', reason: 'unconfirmed' }
+  if (meta.err) return { state: 'rejected', reason: 'failed' }
 
   // owner + mint 一起匹配，这一步已经把「转给别人」和「转的是别的币」都排除了
   const match = (list: TokenBalance[] = []) =>
@@ -335,15 +383,15 @@ export async function verifyPayment(
     case 'tron':
       return item.contract
         ? verifyTron(address, expected, txid, item.contract, notBefore)
-        : { state: 'manual', message: '这条链暂不自动核验' }
+        : { state: 'manual', reason: 'manual' }
     case 'solana':
       return item.contract
         ? verifySolana(address, expected, txid, item.contract, notBefore)
-        : { state: 'manual', message: '这条链暂不自动核验' }
+        : { state: 'manual', reason: 'manual' }
     default:
       // 以太坊和 BSC 没有免费无密钥的公开端点，交人工——
       // 宁可慢一点，也不能因为查不动就默认放行
-      return { state: 'manual', message: '这条链由客服人工核对，通常几分钟内处理' }
+      return { state: 'manual', reason: 'manual' }
   }
 }
 

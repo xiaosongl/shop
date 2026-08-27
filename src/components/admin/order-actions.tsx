@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation'
 import { useState, useTransition } from 'react'
 import { recheckPayment } from '@/lib/actions'
+import { REASON_COPY } from '@/lib/chain'
 import { setOrderStatus } from '@/lib/admin-actions'
 import { ORDER_ACTION_ZH, type OrderStatus, requiresTracking } from '@/lib/order-status'
 import { Card, STATUS_LABEL, inputClass } from './ui'
@@ -84,7 +85,14 @@ export function OrderActions({
             onClick={() =>
               startTransition(async () => {
                 const result = await recheckPayment(recheckNumber)
-                setRecheck(result.state === 'paid' ? '链上核实通过，已放行' : result.message)
+                // 链上判定给的是原因码，在这儿换成中文；限流之类的兜底消息是英文的，照原样显示
+                setRecheck(
+                  result.state === 'paid'
+                    ? '链上核实通过，已放行'
+                    : result.reason
+                      ? REASON_COPY[result.reason].zh
+                      : result.message,
+                )
                 if (result.state === 'paid') router.refresh()
               })
             }

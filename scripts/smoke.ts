@@ -177,6 +177,14 @@ async function runCheckout() {
   check('数量收敛：小数截断', clampQuantity(2.7) === 2)
   check('数量收敛：NaN 归一', clampQuantity(Number.NaN) === 1)
 
+  // 上限按 SKU 算才作数：手工拼一堆同款的行，绕过去就能一次锁掉整个尺码的库存
+  const split = await resolveCart(
+    Array.from({ length: 6 }, () => ({ variantId: variant.id, quantity: MAX_QUANTITY })),
+    'boxed',
+  )
+  check('同款拆成多行会被合并', split.lines.length === 1, `${split.lines.length} 行`)
+  check('合并后照样夹到上限', split.lines[0]?.quantity === expected)
+
   const form = { ...ADDRESS, shippingMethod: 'discreet', paymentMethod: 'whatsapp' }
 
   check(
@@ -524,7 +532,7 @@ async function runPaging() {
 async function runVerification() {
   console.log('\n— 链上核验 —')
 
-  const { judge, toUnits, tronAddressToHex } = await import('../src/lib/chain')
+  const { REASON_COPY, judge, toUnits, tronAddressToHex } = await import('../src/lib/chain')
 
   // Tron 的事件日志给的是 hex 地址，库里存的是 base58，转错了就核不出账
   check(
@@ -581,7 +589,18 @@ async function runVerification() {
 
   // 地址不对时优先报地址，别让用户以为是金额问题
   const wrong = judge({ ...ok, toUs: false, received: 0n })
-  check('拒绝时给得出原因', wrong.state === 'rejected' && wrong.message.length > 0)
+  check('拒绝时给得出原因', wrong.state === 'rejected' && wrong.reason === 'wrongAddress')
+
+  // 每条原因都得两种语言齐备：付款页是英文的，后台是中文的，缺哪边都会露馅
+  const copies = Object.values(REASON_COPY)
+  check(
+    '每条判定原因都有中英两版',
+    copies.every((c) => c.en.length > 0 && c.zh.length > 0),
+  )
+  check(
+    '给客户看的那版不带中文',
+    copies.every((c) => !/[\u4e00-\u9fa5]/.test(c.en)),
+  )
 
   // 下面要把真实的收款配置换成测试地址，所以整段必须 try/finally 包住。
   // 中途抛一次异常就跳过还原的话，运营填的收款地址会被测试占位地址永久顶掉，
@@ -774,6 +793,94 @@ async function runFulfilment() {
   await db.productVariant.update({ where: { id: variant.id }, data: { stock: variant.stock } })
   const restored = await db.productVariant.findUniqueOrThrow({ where: { id: variant.id } })
   check('测试数据已还原', restored.stock === variant.stock)
+}
+
+/**
+ * 弃单回收。下单即扣库存，而放回去只有人工一条路，
+ * 攒几天热销款就全成售罄了。这段盯两件事：该收的收得回来，
+ * 不该动的一个不动；以及同一单被收两遍时，库存只多一份不多两份。
+ */
+async function runReclaim() {
+  console.log('\n— 弃单回收 —')
+
+  const { sweepExpiredOrders } = await import('../src/lib/expire')
+
+  const variant = await db.productVariant.findFirstOrThrow({
+    where: { stock: { gte: 2 }, product: { status: 'ACTIVE' } },
+    select: { id: true, stock: true },
+  })
+
+  const form = { ...ADDRESS, shippingMethod: 'boxed' as const, paymentMethod: 'whatsapp' as const }
+  const made: string[] = []
+
+  try {
+    const placed = await placeOrder([{ variantId: variant.id, quantity: 2 }], form)
+    if (!placed.ok) {
+      console.log(`[skip] 跳过：${placed.message}`)
+      return
+    }
+    made.push(placed.number)
+
+    const locked = await db.productVariant.findUniqueOrThrow({ where: { id: variant.id } })
+    check('下单锁住了库存', locked.stock === variant.stock - 2)
+
+    // 把这单改成一天前下的虚拟币单，就是典型的「看完地址就关页面」
+    const old = new Date(Date.now() - 30 * 60 * 60 * 1000)
+    await db.order.update({
+      where: { number: placed.number },
+      data: { paymentMethod: 'crypto', cryptoAsset: 'usdt-trc20', createdAt: old },
+    })
+
+    // 同时扫两遍：状态没当写入条件的话，两遍都会各还一次，库存凭空多出两件
+    const [a, b] = await Promise.all([sweepExpiredOrders(), sweepExpiredOrders()])
+    check('过期弃单被回收', a + b >= 1, `两轮共取消 ${a + b} 单`)
+
+    const swept = await db.order.findUniqueOrThrow({ where: { number: placed.number } })
+    check('回收后状态是已取消', swept.status === 'CANCELLED')
+
+    const back = await db.productVariant.findUniqueOrThrow({ where: { id: variant.id } })
+    check('库存回到原位，不多不少', back.stock === variant.stock, `${variant.stock} -> ${back.stock}`)
+
+    // 下面三种都不该动：填了哈希的（钱可能在路上）、WhatsApp 的（客服在跟）、刚下的
+    const keep = await placeOrder([{ variantId: variant.id, quantity: 1 }], form)
+    if (!keep.ok) return
+    made.push(keep.number)
+
+    await db.order.update({
+      where: { number: keep.number },
+      data: {
+        paymentMethod: 'crypto',
+        cryptoAsset: 'usdt-trc20',
+        cryptoTxid: `smoke-${Date.now()}`,
+        createdAt: old,
+      },
+    })
+    await sweepExpiredOrders()
+    const withTxid = await db.order.findUniqueOrThrow({ where: { number: keep.number } })
+    check('回填过哈希的不自动取消', withTxid.status === 'PENDING')
+
+    await db.order.update({
+      where: { number: keep.number },
+      data: { paymentMethod: 'whatsapp', cryptoAsset: null, cryptoTxid: null },
+    })
+    await sweepExpiredOrders()
+    const viaWhatsApp = await db.order.findUniqueOrThrow({ where: { number: keep.number } })
+    check('WhatsApp 单不自动取消', viaWhatsApp.status === 'PENDING')
+
+    await db.order.update({
+      where: { number: keep.number },
+      data: { paymentMethod: 'crypto', cryptoAsset: 'usdt-trc20', createdAt: new Date() },
+    })
+    await sweepExpiredOrders()
+    const fresh = await db.order.findUniqueOrThrow({ where: { number: keep.number } })
+    check('刚下的单不会被误杀', fresh.status === 'PENDING')
+  } finally {
+    // 测试单一律清掉，库存按快照写回：上面走了取消回补，加减账不一定平
+    for (const number of made) {
+      await db.order.deleteMany({ where: { number } })
+    }
+    await db.productVariant.update({ where: { id: variant.id }, data: { stock: variant.stock } })
+  }
 }
 
 /**
@@ -1535,6 +1642,7 @@ await runCrypto()
 await runVerification()
 await runPaging()
 await runFulfilment()
+await runReclaim()
 await runAdmin()
 await runVariants()
 await runShowcase()

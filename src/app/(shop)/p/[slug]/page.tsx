@@ -12,14 +12,36 @@ import { GENDERS, genderValues } from '@/lib/taxonomy'
 
 type Props = { params: Promise<{ slug: string }> }
 
+/*
+  显式 select，不能图省事写 include：ProductImage 上挂着图搜用的 CLIP 向量，
+  每张定长 2048 字节。include 会把它一并捞出来，然后随 RSC 数据原样发到浏览器
+  ——客户端组件的 props 类型窄，运行时的对象却是整行。六张图就是 12KB 白扔。
+*/
 function getProduct(slug: string) {
   return db.product.findFirst({
     where: { slug, status: 'ACTIVE' },
-    include: {
-      brand: true,
-      category: { include: { parent: true } },
-      images: { orderBy: { position: 'asc' } },
-      variants: { orderBy: { id: 'asc' } },
+    select: {
+      id: true,
+      slug: true,
+      title: true,
+      description: true,
+      details: true,
+      priceCents: true,
+      compareAtCents: true,
+      gender: true,
+      categoryId: true,
+      brand: { select: { name: true, slug: true } },
+      category: {
+        select: { name: true, slug: true, parent: { select: { name: true, slug: true } } },
+      },
+      images: {
+        orderBy: { position: 'asc' },
+        select: { url: true, blurDataUrl: true, alt: true, ogUrl: true },
+      },
+      variants: {
+        orderBy: { id: 'asc' },
+        select: { id: true, size: true, color: true, colorHex: true, stock: true },
+      },
     },
   })
 }

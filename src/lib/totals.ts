@@ -38,6 +38,19 @@ export const SHIPPING_METHODS = {
 
 export type ShippingMethod = keyof typeof SHIPPING_METHODS
 
+/** 减免最多能减掉这么多 */
+export const MAX_DISCOUNT_CENTS = Math.max(
+  ...Object.values(SHIPPING_METHODS).map((method) => method.discountCents),
+)
+
+/**
+ * 商品最低价，必须高过最大减免。
+ *
+ * 定价等于或低于减免时，单件加不带盒包装算出来的总价正好是 0：
+ * 走虚拟币会永远付不掉（应收为 0 时链上核验直接拒），走 WhatsApp 则是白送。
+ */
+export const MIN_PRICE_CENTS = MAX_DISCOUNT_CENTS + 1
+
 export const SHIPPING_METHOD_KEYS = Object.keys(SHIPPING_METHODS) as ShippingMethod[]
 
 export function isShippingMethod(value: string): value is ShippingMethod {

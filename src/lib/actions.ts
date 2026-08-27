@@ -3,8 +3,9 @@
 import { randomBytes } from 'node:crypto'
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
-import { verifyPayment } from './chain'
+import { REASON_COPY, verifyPayment, type Reason } from './chain'
 import { db } from './db'
+import { sweepSoon } from './expire'
 import { searchByImage, type ImageSearchResult } from './image-search'
 import { sniffImage } from './images'
 import { MAX_IMAGE_BYTES } from './vision'
@@ -68,15 +69,26 @@ function emptyCart(method: ShippingMethod): ResolvedCart {
  * 价格、库存一律以数据库为准，客户端传什么价都不看。
  */
 export async function resolveCart(input: unknown, shipping?: string): Promise<ResolvedCart> {
+  // 挂在这里而不是下单：整个目录被弃单锁成售罄时，恰恰不会再有人下单，
+  // 而看购物车的人照样有。自带节流，不 await。
+  sweepSoon()
+
   const method: ShippingMethod =
     typeof shipping === 'string' && isShippingMethod(shipping) ? shipping : 'boxed'
 
   const parsed = linesSchema.safeParse(input)
   if (!parsed.success || parsed.data.length === 0) return emptyCart(method)
 
-  const wanted = parsed.data
+  // 先按 SKU 合并。同一个 SKU 拆成五十行、每行 10 件就是 500 件，
+  // 上限得按 SKU 算才作数。正常客户端不会产生重复行（加购是累加到同一行），
+  // 这是挡手工构造的请求拿弃单去锁库存。
+  const wanted = new Map<string, number>()
+  for (const line of parsed.data) {
+    wanted.set(line.variantId, (wanted.get(line.variantId) ?? 0) + line.quantity)
+  }
+
   const variants = await db.productVariant.findMany({
-    where: { id: { in: wanted.map((line) => line.variantId) }, product: { status: 'ACTIVE' } },
+    where: { id: { in: [...wanted.keys()] }, product: { status: 'ACTIVE' } },
     select: {
       id: true,
       size: true,
@@ -100,16 +112,16 @@ export async function resolveCart(input: unknown, shipping?: string): Promise<Re
   const removed: string[] = []
   const clamped: string[] = []
 
-  for (const line of wanted) {
-    const variant = byId.get(line.variantId)
+  for (const [variantId, asked] of wanted) {
+    const variant = byId.get(variantId)
     // 售罄的也归到 removed：留在购物车里点不了结算，不如直接清掉并告知
     if (!variant || variant.stock <= 0) {
-      removed.push(line.variantId)
+      removed.push(variantId)
       continue
     }
 
-    const quantity = Math.min(line.quantity, variant.stock, MAX_QUANTITY)
-    if (quantity !== line.quantity) clamped.push(line.variantId)
+    const quantity = Math.min(asked, variant.stock, MAX_QUANTITY)
+    if (quantity !== asked) clamped.push(variantId)
 
     const image = variant.product.images[0]
     lines.push({
@@ -194,6 +206,15 @@ export async function placeOrder(input: unknown, formData: unknown): Promise<Pla
   if (cart.removed.length || cart.clamped.length) {
     return { ok: false, fieldErrors: {}, message: 'Stock changed — please review your bag and try again.' }
   }
+  // 减免被夹到小计时总价正好归零。放过去的话虚拟币单永远付不掉、WhatsApp 单等于白送。
+  // 上架时的最低价校验已经堵住了源头，这里是钱这条路上的兜底。
+  if (cart.totalCents <= 0) {
+    return {
+      ok: false,
+      fieldErrors: {},
+      message: 'This order comes to $0 — please contact us before checking out.',
+    }
+  }
 
   // 汇率拿不到就明确失败。宁可让用户换个币种，也不能拿一个过期汇率去收款。
   // 稳定币恒为 100，走不到失败分支。
@@ -272,13 +293,17 @@ export async function placeOrder(input: unknown, formData: unknown): Promise<Pla
   }
 }
 
+/**
+ * message 一律英文，付款页是给客户看的。链上判定另外带 reason，
+ * 后台拿它换中文——同一个 recheckPayment 两边都在调，光靠一句话伺候不了。
+ */
 export type PaymentState =
   /** 链上已核实，订单已自动放行 */
   | { state: 'paid' }
   /** 已记下，链上还没确认到位，前台会继续轮询 */
-  | { state: 'pending'; message: string }
+  | { state: 'pending'; message: string; reason?: Reason }
   /** 对不上或格式不对，不放行 */
-  | { state: 'rejected'; message: string }
+  | { state: 'rejected'; message: string; reason?: Reason }
 
 /**
  * 用户回填转账哈希，随即去链上核。
@@ -439,8 +464,8 @@ async function settle(
     return { state: 'paid' }
   }
 
-  if (verdict.state === 'rejected') return verdict
-  return { state: 'pending', message: verdict.message }
+  const state = verdict.state === 'rejected' ? 'rejected' : 'pending'
+  return { state, message: REASON_COPY[verdict.reason].en, reason: verdict.reason }
 }
 
 /** 访客订单查询：单号和邮箱都对上才给看 */

@@ -18,6 +18,7 @@ import {
   requiresTracking,
 } from './order-status'
 import { SHOWCASE_KEYS, imageField } from './showcase'
+import { MIN_PRICE_CENTS } from './totals'
 import { syncVariants } from './variants'
 
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024
@@ -135,24 +136,36 @@ export async function setOrderStatus(
     trackingNumber = parsed.value
   }
 
-  await db.$transaction(async (tx) => {
-    if (next.data === 'CANCELLED') {
-      for (const item of order.items) {
-        if (!item.variantId) continue
-        await tx.productVariant.update({
-          where: { id: item.variantId },
-          data: { stock: { increment: item.quantity } },
-        })
+  try {
+    await db.$transaction(async (tx) => {
+      // 状态是在事务外读的，两个并发请求会同时读到 PENDING、同时过掉上面的流转检查。
+      // 把读到的状态当成写入条件，只有真改动了的那一个才往下走 ——
+      // 否则同一单被取消两次，库存凭空多出一份，之后就会超卖。
+      const moved = await tx.order.updateMany({
+        where: { id: order.id, status: order.status },
+        data: {
+          status: next.data,
+          ...(trackingNumber ? { trackingNumber } : {}),
+        },
+      })
+      if (!moved.count) throw new Error('STALE')
+
+      if (next.data === 'CANCELLED') {
+        for (const item of order.items) {
+          if (!item.variantId) continue
+          await tx.productVariant.update({
+            where: { id: item.variantId },
+            data: { stock: { increment: item.quantity } },
+          })
+        }
       }
-    }
-    await tx.order.update({
-      where: { id: order.id },
-      data: {
-        status: next.data,
-        ...(trackingNumber ? { trackingNumber } : {}),
-      },
     })
-  })
+  } catch (error) {
+    if (error instanceof Error && error.message === 'STALE') {
+      return { ok: false, message: '这一单的状态刚被别处改过，刷新页面再试' }
+    }
+    throw error
+  }
 
   revalidatePath('/admin/orders')
   revalidatePath(`/admin/orders/${order.number}`)
@@ -176,7 +189,12 @@ const productSchema = z.object({
   categoryId: z.string().min(1, '必选'),
   gender: z.enum(['MEN', 'WOMEN', 'UNISEX']),
   status: z.enum(['DRAFT', 'ACTIVE', 'ARCHIVED']),
-  priceCents: z.coerce.number().int().min(0).max(100_000_00),
+  // 下限不是 0：定价低于「不带盒」的减免时，单件下单会算出 0 元订单
+  priceCents: z.coerce
+    .number()
+    .int()
+    .min(MIN_PRICE_CENTS, `不能低于 ${MIN_PRICE_CENTS / 100} 美元，否则选不带盒会算出 0 元订单`)
+    .max(100_000_00),
   compareAtCents: z.coerce.number().int().min(0).max(100_000_00).optional(),
   featured: z.coerce.boolean().optional(),
   colors: z.string().trim().max(500).optional(),
