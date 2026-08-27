@@ -1,0 +1,10 @@
+* text=auto eol=lf
+
+# 服务器脚本必须是 LF，带 CRLF 传到 Linux 会直接 bad interpreter
+*.sh text eol=lf
+
+*.png binary
+*.jpg binary
+*.webp binary
+*.ico binary
+*.woff2 binary

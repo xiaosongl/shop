@@ -1,0 +1,21 @@
+node_modules/
+.next/
+out/
+build/
+
+# 生成物与用户数据：deploy.sh 靠 git pull 更新代码，这些必须留在版本控制外，
+# 否则一次部署就把库和上传的图冲掉了
+/data/
+/public/products/
+/public/uploads/
+/src/generated/
+# 图搜的 CLIP 权重，85MB，用 npm run fetch:model 取
+/models/
+
+.env
+.env.local
+*.tsbuildinfo
+next-env.d.ts
+
+.DS_Store
+Thumbs.db

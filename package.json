@@ -1,0 +1,44 @@
+{
+  "name": "shop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "db:migrate": "prisma migrate dev",
+    "postdb:migrate": "prisma generate",
+    "db:reset": "prisma migrate reset --force",
+    "db:seed": "prisma db seed",
+    "postdb:seed": "npm run embed",
+    "db:studio": "prisma studio",
+    "fetch:model": "tsx scripts/fetch-model.ts",
+    "embed": "tsx scripts/embed-products.ts",
+    "check": "tsx scripts/smoke.ts",
+    "deploy": "powershell -ExecutionPolicy Bypass -File scripts/deploy.ps1",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "@prisma/adapter-better-sqlite3": "7.10.0",
+    "@prisma/client": "7.10.0",
+    "@types/qrcode": "1.5.6",
+    "next": "16.3.3",
+    "qrcode": "1.5.4",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "sharp": "0.35.4",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/node": "24.10.1",
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.4",
+    "prisma": "7.10.0",
+    "tailwindcss": "4.3.3",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3"
+  }
+}

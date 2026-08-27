@@ -1,0 +1,54 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  /* Everlane / COS 那一路：几乎不用彩色，靠留白和字重拉层次。
+     灰阶都带一点暖，纯冷灰在大面积白底上会显得发脏。 */
+  --color-ink: #14171a;
+  --color-muted: #6b7177;
+  --color-faint: #9aa0a6;
+  --color-line: #e5e3df;
+  --color-shell: #f7f6f4;
+  --color-sale: #b3452f;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background: #fff;
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background: var(--color-ink);
+    color: #fff;
+  }
+
+  /* 键盘导航看得见焦点，鼠标点击不出现难看的外框 */
+  :focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 2px;
+  }
+}
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@utility label-xs {
+  font-size: 11px;
+  line-height: 1.2;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 500;
+}

@@ -1,0 +1,212 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+}
+
+// Prisma 7 起 url 不再允许写在 schema 里，连接串统一放 prisma.config.ts，
+// 运行时则由 PrismaClient 的 adapter 提供（见 src/lib/db.ts）
+datasource db {
+  provider = "sqlite"
+}
+
+// SQLite 没有原生枚举，状态字段统一用 String，取值约束放在应用层（src/lib/constants.ts）
+
+model Category {
+  id       String  @id @default(cuid())
+  slug     String  @unique
+  name     String // 前台英文
+  nameZh   String // 后台中文
+  position Int     @default(0)
+  parentId String?
+
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children Category[] @relation("CategoryTree")
+  products Product[]
+
+  @@index([parentId])
+}
+
+model Brand {
+  id          String  @id @default(cuid())
+  slug        String  @unique
+  name        String
+  description String?
+  position    Int     @default(0)
+
+  // 品牌墙的封面。留空时前台回退到该品牌下的第一张商品图，
+  // 所以后台不传图也不会开天窗。
+  imageUrl  String?
+  imageBlur String?
+
+  products Product[]
+}
+
+/// 每个「币+链」的收款配置，后台可改。币种目录本身写死在 lib/crypto.ts，
+/// 这里只存地址和开关——只有开关打开且地址填了的币，前台才会出现在支付方式里。
+model CryptoWallet {
+  assetKey  String   @id // 对应 crypto.ts 的 AssetKey
+  address   String
+  enabled   Boolean  @default(false)
+  updatedAt DateTime @updatedAt
+}
+
+/// 站名、顶部公告、首页主视觉、性别入口、页脚备注这些「没有数据表可挂」的文案位。
+/// key 的清单在 lib/showcase.ts，加新位置时加一行即可，不用改表结构。
+/// 每个字段都可空：空就用代码里的缺省文案和自动挑的商品图。
+model Showcase {
+  key       String   @id
+  imageUrl  String?
+  imageBlur String?
+  headline  String?
+  subhead   String?
+  updatedAt DateTime @updatedAt
+}
+
+/// 退款、条款、隐私这类静态政策页，后台可增删改。
+/// body 存纯文本，前台按空行分段渲染，永远不当 HTML 解析——
+/// 这是个后台能写、访客能读的字段，当 HTML 渲染就等于开了一个存储型 XSS。
+model Policy {
+  slug      String   @id
+  title     String
+  body      String
+  position  Int      @default(0)
+  published Boolean  @default(true)
+  updatedAt DateTime @updatedAt
+}
+
+model Product {
+  id             String  @id @default(cuid())
+  slug           String  @unique
+  title          String
+  description    String
+  details        String? // 面料/尺码等，详情页折叠区，一行一条
+  priceCents     Int
+  compareAtCents Int? // 划线原价
+  status         String  @default("ACTIVE") // DRAFT | ACTIVE | ARCHIVED
+  featured       Boolean @default(false)
+
+  // MEN | WOMEN | UNISEX。前台只展示 Men / Women 两个入口，
+  // UNISEX 的商品（包、表这类）在两个入口下都会出现。
+  gender String @default("UNISEX")
+
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id])
+  brandId    String
+  brand      Brand    @relation(fields: [brandId], references: [id])
+
+  images   ProductImage[]
+  variants ProductVariant[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([categoryId])
+  @@index([brandId])
+  @@index([status, featured])
+  @@index([status, createdAt])
+  // 主浏览路径是 品牌 -> 性别 -> 类别，这条复合索引正好覆盖
+  @@index([brandId, gender, categoryId])
+}
+
+model ProductImage {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  // 指向 1200 那一档，实际渲染时 image-loader 按需换成别的宽度
+  url         String
+  ogUrl       String // 1200x630 分享卡片图
+  blurDataUrl String // 20px 缩略图的 base64，用作 placeholder，避免加载闪烁
+  width       Int
+  height      Int
+  alt         String
+  position    Int    @default(0)
+
+  // 图搜用的 CLIP 向量：512 个 float32，定长 2048 字节。空表示还没跑过回填。
+  embedding Bytes?
+
+  @@index([productId, position])
+}
+
+model ProductVariant {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  sku      String  @unique
+  size     String?
+  color    String?
+  colorHex String?
+  stock    Int     @default(0)
+
+  orderItems OrderItem[]
+
+  @@index([productId])
+}
+
+model Order {
+  id     String @id @default(cuid())
+  number String @unique // 展示用单号，例如 NS-8F3K2Q
+  email  String
+  // PENDING 表示已下单未收款，BTC 到账或客服确认后才转 PAID
+  status String @default("PENDING") // PENDING | PAID | SHIPPED | CANCELLED
+
+  subtotalCents Int
+  discountCents Int @default(0) // 选「不带盒不带发票」的减免
+  shippingCents Int
+  taxCents      Int
+  totalCents    Int
+
+  shippingMethod String @default("boxed") // boxed | discreet
+  paymentMethod  String @default("whatsapp") // whatsapp | crypto
+
+  // 下单时就把币种、汇率、应付数额锁死，否则用户付款时币价一波动就对不上账。
+  // cryptoAsset 记的是「币+链」（如 usdt-trc20），核验时要按对应链去查。
+  cryptoAsset     String? // 见 lib/crypto.ts 的 AssetKey
+  cryptoAmount    String? // 字符串存，避免浮点误差
+  cryptoRateCents Int? // 下单当时 1 枚 = 多少美分；稳定币恒为 100
+  // 唯一：同一笔转账不能拿去认领两笔订单。付一次款填三个单，
+  // 人工核对时每单看到的都是「链上确有此交易」，这个约束是唯一的拦截点。
+  cryptoTxid       String?   @unique
+  cryptoVerifiedAt DateTime? // 链上核实通过的时间；人工确认收款的订单这里为空
+
+  trackingNumber String? // USPS 单号，转「运输中」时必填
+
+  name       String
+  line1      String
+  line2      String?
+  city       String
+  state      String
+  postalCode String
+  country    String
+  phone      String?
+
+  items OrderItem[]
+
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([status])
+}
+
+// 商品信息在这里做快照。不靠 variant 外键读当前值，
+// 否则后台改一次价，所有历史订单的金额跟着变。
+model OrderItem {
+  id      String @id @default(cuid())
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  variantId String?
+  variant   ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  productSlug    String
+  productTitle   String
+  brandName      String
+  variantLabel   String // 例如 "Black / M"
+  imageUrl       String
+  unitPriceCents Int
+  quantity       Int
+
+  @@index([orderId])
+}
