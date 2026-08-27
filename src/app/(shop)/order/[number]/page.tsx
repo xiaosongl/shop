@@ -6,7 +6,7 @@ import QRCode from 'qrcode'
 import { CryptoPayment } from '@/components/crypto-payment'
 import { OrderNumber } from '@/components/order-number'
 import { AUTO_VERIFIED_NETWORKS } from '@/lib/chain'
-import { paymentUri } from '@/lib/crypto'
+import { asset, isAssetKey, paymentUri } from '@/lib/crypto'
 import { db } from '@/lib/db'
 import { formatPrice } from '@/lib/format'
 import {
@@ -33,12 +33,19 @@ export default async function OrderPage({ params }: Props) {
 
   const status = ORDER_STATUS_EN[order.status as OrderStatus] ?? ORDER_STATUS_EN.PENDING
 
-  // 收款地址按订单当初选的币种现取。后台换了地址，未付款的老单会跟着走新地址，
-  // 这是对的——旧地址可能已经弃用了。
-  const paying =
-    order.status === 'PENDING' && order.paymentMethod === 'crypto' && order.cryptoAmount
-      ? await payableAsset(order.cryptoAsset)
+  // 收款地址用下单时快照的那一个。展示和核验必须指向同一个地址：页面上给新地址、
+  // 后台拿旧快照去核，客户照着页面付了反倒被判「没转到我们地址」。
+  // 快照为空只可能是加这一列之前的老订单，那才退回现取。
+  const item =
+    order.status === 'PENDING' &&
+    order.paymentMethod === 'crypto' &&
+    order.cryptoAmount &&
+    isAssetKey(order.cryptoAsset)
+      ? asset(order.cryptoAsset)
       : null
+
+  const payTo = item ? order.cryptoAddress?.trim() || (await payableAsset(item.key))?.address : null
+  const paying = item && payTo ? { ...item, address: payTo } : null
 
   const qrDataUrl = paying
     ? await QRCode.toDataURL(paymentUri(paying.key, paying.address, order.cryptoAmount!), {
@@ -106,10 +113,10 @@ export default async function OrderPage({ params }: Props) {
         </div>
       )}
 
-      {/* 条件是「没有币可付」而不是「选了本地支付」：后台把某个币关掉之后，
-          在途的该币种待付款单会取不到收款地址，上面那块就整个不渲染——
-          页头还写着「Send payment below」，下面却什么都没有，客人只能干等。
-          这一块顺带兜住那种情况，反正走人工开发票本来就是通用的退路。 */}
+      {/* 条件是「没有币可付」而不是「选了本地支付」：老订单没有地址快照、后台又把
+          那个币关掉了的话，上面那块会整个不渲染——页头还写着「Send payment below」，
+          下面却什么都没有，客人只能干等。这一块兜住那种情况，
+          反正走人工开发票本来就是通用的退路。 */}
       {unpaid && !paying && (
         <section className="mt-10 mb-12 border border-line p-6 text-center md:p-8">
           <h2 className="label-xs text-faint">Local payment</h2>

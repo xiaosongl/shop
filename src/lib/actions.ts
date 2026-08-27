@@ -25,7 +25,9 @@ const linesSchema = z
   .array(
     z.object({
       variantId: z.string().min(1).max(64),
-      quantity: z.number().int().min(1).max(MAX_QUANTITY),
+      // 上限故意不在这里卡死：单行超标会让整个数组解析失败、购物车变空，
+      // 而下面的循环本来就会 clamp 到 MAX_QUANTITY 并记进 clamped 告诉前端。
+      quantity: z.number().int().min(1),
     }),
   )
   .max(50)
@@ -233,6 +235,7 @@ export async function placeOrder(input: unknown, formData: unknown): Promise<Pla
           cryptoRateCents: rateCents,
           cryptoAmount:
             chosen && rateCents ? amountFor(cart.totalCents, rateCents, chosen.decimals) : null,
+          cryptoAddress: chosen?.address ?? null,
           name: data.name,
           line1: data.line1,
           line2: data.line2 || null,
@@ -297,15 +300,51 @@ export async function submitTxid(orderNumber: string, txid: unknown): Promise<Pa
     return { state: 'rejected', message: `A ${item.networkLabel} transaction ID is ${item.txidHint}.` }
   }
 
+  // 钱已经到账的直接停，别拿新哈希覆盖掉那条已核实的。
+  // 已取消的要继续往下走：那种订单同样可能刚收到钱。
+  if (order.status !== 'PENDING' && order.status !== 'CANCELLED') return { state: 'paid' }
+
   // 唯一约束挡的是「一笔转账认领多个订单」。先查一次只为给出人话提示，
   // 真正的拦截在数据库那层，并发下也不会漏。
   try {
     await db.order.update({ where: { id: order.id }, data: { cryptoTxid: value } })
-  } catch {
-    return { state: 'rejected', message: 'That transaction ID is already attached to another order.' }
+  } catch (error) {
+    if (isDuplicate(error)) {
+      return {
+        state: 'rejected',
+        message: 'That transaction ID is already attached to another order.',
+      }
+    }
+    // 写库挂了却说「这笔转账是别人的」，会把客户和客服一起带沟里
+    return { state: 'rejected', message: 'Could not save that transaction ID. Please try again.' }
   }
 
+  // 后台整个 (protected) 是 force-dynamic，哈希落了库下次打开就看得到，不用 revalidate
+  if (order.status === 'CANCELLED') return notPending(order)
+
   return settle(order, item, value)
+}
+
+/** P2002 才是唯一约束冲突，其余写库失败是另一回事 */
+function isDuplicate(error: unknown) {
+  return (
+    typeof error === 'object' && error !== null && (error as { code?: string }).code === 'P2002'
+  )
+}
+
+/**
+ * 不在待付款状态时回什么。
+ *
+ * 已取消必须单独说：这种订单也可能刚收到钱，回一句「已付款」会让客户以为货在路上，
+ * 沉默则连申诉的入口都没有。哈希这时已经落库，客服凭单号能查到。
+ */
+function notPending(order: NonNullable<Payable>): PaymentState {
+  return order.status === 'CANCELLED'
+    ? {
+        state: 'rejected',
+        message: `Order ${order.number} was cancelled. If you have already sent payment, message us on WhatsApp with this order number and we will sort it out.`,
+      }
+    : { state: 'paid' }
 }
 
 /** 前台轮询和后台重核都走这里 */
@@ -320,6 +359,8 @@ export async function recheckPayment(orderNumber: string): Promise<PaymentState>
   if (found.error) return found.error
 
   const { order, item } = found
+  // 已经放行过的回 paid，轮询的前台看到就会停下来
+  if (order.status !== 'PENDING') return notPending(order)
   if (!order.cryptoTxid) return { state: 'pending', message: 'Submit your transaction ID first.' }
   return settle(order, item, order.cryptoTxid)
 }
@@ -336,7 +377,9 @@ async function findPayable(orderNumber: string) {
       paymentMethod: true,
       cryptoAsset: true,
       cryptoAmount: true,
+      cryptoAddress: true,
       cryptoTxid: true,
+      createdAt: true,
     },
   })
 }
@@ -347,11 +390,11 @@ async function loadPayable(orderNumber: string): Promise<
 > {
   const order = await findPayable(orderNumber)
 
+  // 状态不在这里判：调用方要先把哈希落库再看状态，
+  // 否则已取消订单收到的那笔钱就彻底没了记录。
   if (!order || order.paymentMethod !== 'crypto' || !order.cryptoAmount) {
     return { error: { state: 'rejected', message: 'Order not found.' } }
   }
-  // 已经放行过的直接回 paid，轮询的前台看到就会停下来
-  if (order.status !== 'PENDING') return { error: { state: 'paid' } }
   if (!isAssetKey(order.cryptoAsset)) {
     return { error: { state: 'rejected', message: 'Order not found.' } }
   }
@@ -359,16 +402,29 @@ async function loadPayable(orderNumber: string): Promise<
   return { error: null, order, item: asset(order.cryptoAsset) }
 }
 
-/** 核验并在通过时放行。地址现取，后台换过地址的话按新的核 */
+/**
+ * 核验并在通过时放行。
+ *
+ * 地址一律用下单时快照的那一个 —— 客户就是照着它转的账，后台之后换没换
+ * 都改变不了这笔已经发生的转账。现取会把换地址那一刻所有在途付款判成
+ * 「没转到我们地址」，而且是 rejected 不是 pending，重核多少次都翻不了案。
+ * 快照为空只可能是加这一列之前的老订单，那才退回现取。
+ */
 async function settle(
   order: NonNullable<Payable>,
   item: ReturnType<typeof asset>,
   txid: string,
 ): Promise<PaymentState> {
-  const wallet = await payableAsset(item.key)
-  if (!wallet) return { state: 'pending', message: 'Verifying — our team will confirm shortly.' }
+  const address = order.cryptoAddress?.trim() || (await payableAsset(item.key))?.address
+  if (!address) return { state: 'pending', message: 'Verifying — our team will confirm shortly.' }
 
-  const verdict = await verifyPayment(item, wallet.address, order.cryptoAmount!, txid)
+  const verdict = await verifyPayment(
+    item,
+    address,
+    order.cryptoAmount!,
+    txid,
+    order.createdAt.getTime(),
+  )
 
   if (verdict.state === 'paid') {
     // 带上 status 条件，两个并发的核验只会有一个真正改到状态

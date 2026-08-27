@@ -9,6 +9,17 @@ export const TAX_RATE = 0
 export const MAX_QUANTITY = 10
 
 /**
+ * 把任意数字收敛成合法数量。
+ *
+ * 本地存的购物车是不可信输入，收敛而不是拒绝：单行不合法就整车作废的话，
+ * 顾客看到的是空购物车，而本地那条坏数据没人清得掉，等于永久卡死。
+ */
+export function clampQuantity(quantity: number): number {
+  if (!Number.isFinite(quantity)) return 1
+  return Math.min(Math.max(Math.trunc(quantity), 1), MAX_QUANTITY)
+}
+
+/**
  * 运输方式。运费本身含在商品价里，两个选项的差别是包装：
  * 带盒带发票按原价，不带盒不带发票减 $15。
  */

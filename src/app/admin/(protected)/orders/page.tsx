@@ -72,6 +72,10 @@ export default async function AdminOrders({
                 {order.status === 'PENDING' && order.cryptoTxid && (
                   <span className="ml-2 text-xs text-amber-700">已填 TXID</span>
                 )}
+                {/* 取消之后才回填的哈希：钱很可能真到了，这一单得有人去核 */}
+                {order.status === 'CANCELLED' && order.cryptoTxid && (
+                  <span className="ml-2 text-xs text-red-700">取消后收到款</span>
+                )}
               </td>
               <td className="px-4 py-3 text-muted">{order.email}</td>
               <td className="px-4 py-3 tabular-nums">{formatPrice(order.totalCents)}</td>

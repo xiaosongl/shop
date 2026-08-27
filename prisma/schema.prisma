@@ -161,11 +161,14 @@ model Order {
   shippingMethod String @default("boxed") // boxed | discreet
   paymentMethod  String @default("whatsapp") // whatsapp | crypto
 
-  // 下单时就把币种、汇率、应付数额锁死，否则用户付款时币价一波动就对不上账。
+  // 下单时就把币种、汇率、应付数额、收款地址锁死，否则用户付款时币价一波动就对不上账。
   // cryptoAsset 记的是「币+链」（如 usdt-trc20），核验时要按对应链去查。
   cryptoAsset     String? // 见 lib/crypto.ts 的 AssetKey
   cryptoAmount    String? // 字符串存，避免浮点误差
   cryptoRateCents Int? // 下单当时 1 枚 = 多少美分；稳定币恒为 100
+  // 报给这位客户的收款地址。必须存：后台换过地址之后，拿新地址去核旧订单
+  // 会一律判「没转到我们地址」，把在途的付款全部误杀。
+  cryptoAddress   String?
   // 唯一：同一笔转账不能拿去认领两笔订单。付一次款填三个单，
   // 人工核对时每单看到的都是「链上确有此交易」，这个约束是唯一的拦截点。
   cryptoTxid       String?   @unique

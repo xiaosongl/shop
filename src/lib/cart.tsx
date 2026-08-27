@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { resolveCart, type ResolvedCart } from './actions'
-import type { ShippingMethod } from './totals'
+import { clampQuantity, type ShippingMethod } from './totals'
 
 const STORAGE_KEY = 'northsound.cart.v1'
 
@@ -29,13 +29,15 @@ function read(): CartLine[] {
     if (!raw) return []
     const parsed: unknown = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
-    return parsed.filter(
-      (line): line is CartLine =>
-        typeof line === 'object' &&
-        line !== null &&
-        typeof (line as CartLine).variantId === 'string' &&
-        Number.isFinite((line as CartLine).quantity),
-    )
+    // 逐行收敛，坏行只丢自己。数量在这里就夹进合法区间，
+    // 于是加购没设上限那版留下的超额行一进来就被治好了。
+    return parsed.flatMap((line): CartLine[] => {
+      if (typeof line !== 'object' || line === null) return []
+      const { variantId, quantity } = line as Partial<CartLine>
+      if (typeof variantId !== 'string' || !variantId) return []
+      if (typeof quantity !== 'number') return []
+      return [{ variantId, quantity: clampQuantity(quantity) }]
+    })
   } catch {
     return []
   }
@@ -67,9 +69,12 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const add = useCallback((variantId: string, quantity = 1) => {
     setLines((current) => {
       const existing = current.find((line) => line.variantId === variantId)
-      if (!existing) return [...current, { variantId, quantity }]
+      if (!existing) return [...current, { variantId, quantity: clampQuantity(quantity) }]
+      // 累加要夹上限：第二次加购把总数顶过 MAX_QUANTITY 是最常见的正常操作
       return current.map((line) =>
-        line.variantId === variantId ? { ...line, quantity: line.quantity + quantity } : line,
+        line.variantId === variantId
+          ? { ...line, quantity: clampQuantity(line.quantity + quantity) }
+          : line,
       )
     })
   }, [])
@@ -78,7 +83,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     setLines((current) =>
       quantity <= 0
         ? current.filter((line) => line.variantId !== variantId)
-        : current.map((line) => (line.variantId === variantId ? { ...line, quantity } : line)),
+        : current.map((line) =>
+            line.variantId === variantId ? { ...line, quantity: clampQuantity(quantity) } : line,
+          ),
     )
   }, [])
 

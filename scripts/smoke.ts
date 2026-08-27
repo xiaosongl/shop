@@ -8,7 +8,7 @@
  *
  * 用法：npm run dev 之后 npm run check
  */
-import { MAX_QUANTITY, SHIPPING_METHODS, totalsFor } from '../src/lib/totals'
+import { MAX_QUANTITY, SHIPPING_METHODS, clampQuantity, totalsFor } from '../src/lib/totals'
 import { GENDER_SLUGS, genderValues } from '../src/lib/taxonomy'
 
 // 这个脚本不经过 Next，得自己把 .env 读进来。db.ts 在模块顶层就读 DATABASE_URL，
@@ -160,6 +160,22 @@ async function runCheckout() {
   const greedy = await resolveCart([{ variantId: variant.id, quantity: MAX_QUANTITY }], 'boxed')
   const expected = Math.min(variant.stock, MAX_QUANTITY)
   check('超库存被夹取', greedy.lines[0]?.quantity === expected, `${greedy.lines[0]?.quantity} / 库存 ${variant.stock}`)
+
+  // 同一件加购两次把总数顶过上限，是最普通不过的买法。
+  // 这里要是整个数组解析失败，购物车会静默变空，而本地那条坏数据没人清得掉。
+  const overflow = await resolveCart(
+    [{ variantId: variant.id, quantity: MAX_QUANTITY + 5 }],
+    'boxed',
+  )
+  check('数量超上限不清空整车', overflow.lines.length === 1, `${overflow.lines.length} 行`)
+  check('超上限的行夹到上限', overflow.lines[0]?.quantity === expected)
+  check('并且告诉前端这行被改过', overflow.clamped.includes(variant.id))
+
+  // 本地存的东西不可信，进程序之前先收敛
+  check('数量收敛：超上限', clampQuantity(MAX_QUANTITY + 2) === MAX_QUANTITY)
+  check('数量收敛：零和负数归一', clampQuantity(0) === 1 && clampQuantity(-3) === 1)
+  check('数量收敛：小数截断', clampQuantity(2.7) === 2)
+  check('数量收敛：NaN 归一', clampQuantity(Number.NaN) === 1)
 
   const form = { ...ADDRESS, shippingMethod: 'discreet', paymentMethod: 'whatsapp' }
 
@@ -532,14 +548,17 @@ async function runVerification() {
   check('八位精度不丢', toUnits('0.00056676', 8) === 56_676n)
   check('多余精度被截断而非四舍五入', toUnits('1.9999999', 2) === 199n)
 
+  const placedAt = Date.now() - 10 * 60_000
   const ok = {
     toUs: true,
     contractOk: true,
     received: 45_000_000n,
     expected: 45_000_000n,
     confirmed: true,
+    at: placedAt + 60_000,
+    notBefore: placedAt,
   }
-  check('四项全过才放行', judge(ok).state === 'paid')
+  check('五项全过才放行', judge(ok).state === 'paid')
 
   // 不查收款地址的话，从区块浏览器随便抄一个真实哈希就能白拿货
   check('转给别人的不放行', judge({ ...ok, toUs: false }).state === 'rejected')
@@ -551,50 +570,113 @@ async function runVerification() {
   check('确认数不够只等待，不拒也不放', judge({ ...ok, confirmed: false }).state === 'pending')
   check('应收为 0 不放行', judge({ ...ok, expected: 0n }).state === 'rejected')
 
+  // 所有客户共用一个收款地址，不比时间的话，任何一笔无人认领的历史入账
+  // 都能被拿去认领新订单——后台「确认收款」不记 TXID，这种入账会一直积累
+  const day = 24 * 60 * 60 * 1000
+  check('下单之前的转账不放行', judge({ ...ok, at: placedAt - day }).state === 'rejected')
+  check('进块了却没有时间只等待', judge({ ...ok, at: 0 }).state === 'pending')
+  // 比特币区块时间戳允许落后真实时间，给两小时余量，别误杀真付款
+  check('时钟误差内的转账仍放行', judge({ ...ok, at: placedAt - 60 * 60_000 }).state === 'paid')
+  check('超出误差余量就拒', judge({ ...ok, at: placedAt - 3 * 60 * 60_000 }).state === 'rejected')
+
   // 地址不对时优先报地址，别让用户以为是金额问题
   const wrong = judge({ ...ok, toUs: false, received: 0n })
   check('拒绝时给得出原因', wrong.state === 'rejected' && wrong.message.length > 0)
 
-  // 一笔转账认领两个订单：付一次款填三个单，人工核对时每单都显示「链上确有此交易」
+  // 下面要把真实的收款配置换成测试地址，所以整段必须 try/finally 包住。
+  // 中途抛一次异常就跳过还原的话，运营填的收款地址会被测试占位地址永久顶掉，
+  // 而备份只存在这个进程的内存里，进程一死就找不回来了。
   const before = await db.cryptoWallet.findMany()
-  await db.cryptoWallet.deleteMany()
-  await db.cryptoWallet.create({
-    data: { assetKey: 'usdt-trc20', address: SAMPLE.tron, enabled: true },
-  })
-
   const variant = await db.productVariant.findFirstOrThrow({
-    where: { stock: { gte: 2 }, product: { status: 'ACTIVE' } },
+    where: { stock: { gte: 4 }, product: { status: 'ACTIVE' } },
     select: { id: true, stock: true },
   })
-  const make = () =>
-    placeOrder([{ variantId: variant.id, quantity: 1 }], {
+
+  const made: string[] = []
+  const make = async () => {
+    const result = await placeOrder([{ variantId: variant.id, quantity: 1 }], {
       ...ADDRESS,
       shippingMethod: 'boxed',
       paymentMethod: 'crypto',
       cryptoAsset: 'usdt-trc20',
     })
-
-  const first = await make()
-  const second = await make()
-  if (first.ok && second.ok) {
-    const hash = 'b'.repeat(64)
-    const one = await submitTxid(first.number, hash)
-    const two = await submitTxid(second.number, hash)
-    check('同一 TXID 第一单收下', one.state === 'pending')
-    check('同一 TXID 第二单被拒', two.state === 'rejected', two.state)
-
-    const dup = await db.order.count({ where: { cryptoTxid: hash } })
-    check('库里只有一单挂着这个 TXID', dup === 1, String(dup))
-
-    await db.order.deleteMany({ where: { number: { in: [first.number, second.number] } } })
+    if (result.ok) made.push(result.number)
+    return result
   }
 
-  await db.productVariant.update({ where: { id: variant.id }, data: { stock: variant.stock } })
-  await db.cryptoWallet.deleteMany()
-  if (before.length) {
-    await db.cryptoWallet.createMany({
-      data: before.map(({ assetKey, address, enabled }) => ({ assetKey, address, enabled })),
+  try {
+    await db.cryptoWallet.deleteMany()
+    await db.cryptoWallet.create({
+      data: { assetKey: 'usdt-trc20', address: SAMPLE.tron, enabled: true },
     })
+
+    // 一笔转账认领两个订单：付一次款填三个单，人工核对时每单都显示「链上确有此交易」
+    const first = await make()
+    const second = await make()
+    if (first.ok && second.ok) {
+      const hash = 'b'.repeat(64)
+      const one = await submitTxid(first.number, hash)
+      const two = await submitTxid(second.number, hash)
+      check('同一 TXID 第一单收下', one.state === 'pending')
+      check('同一 TXID 第二单被拒', two.state === 'rejected', two.state)
+
+      const dup = await db.order.count({ where: { cryptoTxid: hash } })
+      check('库里只有一单挂着这个 TXID', dup === 1, String(dup))
+    }
+
+    // 收款地址必须在下单时快照。核验时现取的话，后台一换地址，所有在途付款
+    // 都会被判「没转到我们地址」——而且是 rejected 不是 pending，重核多少次都翻不了案。
+    const snap = await make()
+    if (snap.ok) {
+      const saved = await db.order.findUniqueOrThrow({
+        where: { number: snap.number },
+        select: { cryptoAddress: true },
+      })
+      check('下单时快照了收款地址', saved.cryptoAddress === SAMPLE.tron, String(saved.cryptoAddress))
+
+      // 展示和核验必须指向同一个地址：页面给新的、后台按旧快照核，
+      // 客户照着页面付了反倒不通过
+      const rotated = 'TJRabPrwbZy45sbavfcjinPJC18kjpRTv8'
+      await db.cryptoWallet.update({
+        where: { assetKey: 'usdt-trc20' },
+        data: { address: rotated },
+      })
+      const page = await fetch(`${BASE}/order/${snap.number}`).then((r) => r.text())
+      check('换地址后付款页仍给下单时那个', page.includes(SAMPLE.tron) && !page.includes(rotated))
+
+      await db.cryptoWallet.update({
+        where: { assetKey: 'usdt-trc20' },
+        data: { address: SAMPLE.tron },
+      })
+    }
+
+    // 已取消的订单收到钱：哈希必须落库。过去这里直接回「已付款」就返回了，
+    // 客户看到的页面写着 Nothing was charged，而钱已经进了钱包，库里零记录。
+    const dead = await make()
+    if (dead.ok) {
+      await db.order.update({ where: { number: dead.number }, data: { status: 'CANCELLED' } })
+      const hash = 'c'.repeat(64)
+      const said = await submitTxid(dead.number, hash)
+      const row = await db.order.findUniqueOrThrow({
+        where: { number: dead.number },
+        select: { cryptoTxid: true },
+      })
+      check('已取消订单的转账哈希落了库', row.cryptoTxid === hash, String(row.cryptoTxid))
+      check('不谎报已付款', said.state === 'rejected', said.state)
+      check(
+        '提示里带单号，客户拿得出凭据',
+        said.state === 'rejected' && said.message.includes(dead.number),
+      )
+    }
+  } finally {
+    await db.order.deleteMany({ where: { number: { in: made } } })
+    await db.productVariant.update({ where: { id: variant.id }, data: { stock: variant.stock } })
+    await db.cryptoWallet.deleteMany()
+    if (before.length) {
+      await db.cryptoWallet.createMany({
+        data: before.map(({ assetKey, address, enabled }) => ({ assetKey, address, enabled })),
+      })
+    }
   }
 }
 
@@ -1524,7 +1606,9 @@ async function runSiteText() {
 
   /* 首页大标题居中，且排在两个性别入口之后：选性别是进站第一件事。
      不去匹配具体的 padding 类名，那个一调排版就失效，找标题所在的 section 才稳 */
-  const heroAt = restored.indexOf(SHOWCASE_FALLBACK.home.headline)
+  // 锚在 <h1> 这个结构上，不锚具体文案：主标题现在归后台管，
+  // 写死内置文案的话运营一改首页这条就开始误报
+  const heroAt = restored.indexOf('<h1')
   const tilesAt = restored.indexOf('aspect-3/4')
   check('性别入口排在大标题之前', tilesAt > 0 && heroAt > tilesAt, `入口@${tilesAt} 标题@${heroAt}`)
 

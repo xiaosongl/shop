@@ -4,14 +4,16 @@ import type { Asset } from './crypto'
  * 链上核验：拿客户填的 TXID 去链上查这笔转账到底成没成。
  *
  * 通过就自动放行订单，所以这里是整个系统里唯一一处「判断错了就白送货」的代码。
- * 每条链的适配都必须把这四件事全查清楚，缺一条就是一个白拿货的口子：
+ * 每条链的适配都必须把这五件事全查清楚，缺一条就是一个白拿货的口子：
  *
  *   1. 收款地址是我们的 —— 不查的话，随便从区块浏览器抄一个真实哈希就能过
  *   2. 金额不少于应付   —— 少付不放行，多付放行
  *   3. 确认数够          —— 0 确认可被 RBF 替换掉，看到到账就发货等于送
  *   4. 代币合约对得上   —— 山寨币可以随便起名叫 USDT，只能认合约地址
+ *   5. 转账晚于下单     —— 所有客户看到的是同一个收款地址，不比时间的话，
+ *                          任何一笔无人认领的历史入账都能被拿去认领新订单
  *
- * 第五条「同一个 TXID 不能用两次」由数据库唯一约束负责，不在这里。
+ * 第六条「同一个 TXID 不能用两次」由数据库唯一约束负责，不在这里。
  *
  * 接口全部用免费公开端点，不需要注册和密钥。以太坊和 BSC 没有这种端点，
  * 所以那两条链返回 manual 交人工核，不会误放行。
@@ -64,10 +66,27 @@ export type Facts = {
   expected: bigint
   /** 确认数够不够 */
   confirmed: boolean
+  /** 这笔转账上链的时间，毫秒。0 表示没取到 */
+  at: number
+  /** 订单创建时间，毫秒。早于它的转账不算这一单的 */
+  notBefore: number
 }
 
 /**
- * 放不放行就看这一个函数。四条规则集中在这里，
+ * 允许交易时间比下单时间早这么多。
+ *
+ * 纯粹是给时钟误差留余量：比特币的区块时间戳只要求大于前 11 块的中位数，
+ * 落后真实时间将近一小时也是合法的。宁可放宽也别误杀真实付款。
+ *
+ * ponytail: 这道闸把「能被认领的历史入账」从全部历史压缩到下单前两小时以内。
+ * 要彻底关死，得给每单派生一个独立收款地址（HD 钱包），或者给每单应付金额
+ * 加一个随机零头再按区间比对 —— 都是另一个工程。现在这条挡住的是实际可操作的那种攻击：
+ * 盯着地址翻历史入账，捡一笔没人认领的来白拿货。
+ */
+const CLOCK_SKEW = 2 * 60 * 60 * 1000
+
+/**
+ * 放不放行就看这一个函数。五条规则集中在这里，
  * 各链适配只负责把响应翻译成 Facts，翻译错了顶多是查不到，不会误放行。
  */
 export function judge(facts: Facts): Verdict {
@@ -80,6 +99,11 @@ export function judge(facts: Facts): Verdict {
   }
   // 金额地址都对，只是还没确认——等，别拒
   if (!facts.confirmed) return { state: 'pending', message: '等待区块确认' }
+  // 已进块却拿不到时间，就没法判断它属不属于这一单，只能等下一轮
+  if (!facts.at) return { state: 'pending', message: '正在确认这笔转账的时间' }
+  if (facts.at < facts.notBefore - CLOCK_SKEW) {
+    return { state: 'rejected', message: '这笔转账发生在下单之前，不属于这个订单' }
+  }
   return { state: 'paid' }
 }
 
@@ -111,13 +135,14 @@ async function verifyEsplora(
   address: string,
   expected: string,
   txid: string,
+  notBefore: number,
 ): Promise<Verdict> {
   const { hosts, minConfirmations } = ESPLORA[chain]
 
   for (const host of hosts) {
     const tx = (await getJson(`${host}/tx/${txid}`)) as {
       vout?: { scriptpubkey_address?: string; value?: number }[]
-      status?: { confirmed?: boolean; block_height?: number }
+      status?: { confirmed?: boolean; block_height?: number; block_time?: number }
     } | null
     // 这家查不到就换下一家，都查不到才算「链上没有」
     if (!tx?.vout) continue
@@ -140,6 +165,9 @@ async function verifyEsplora(
       received,
       expected: toUnits(expected, 8),
       confirmed: confirmations >= minConfirmations,
+      // Esplora 给的是秒
+      at: (tx.status?.block_time ?? 0) * 1000,
+      notBefore,
     })
   }
 
@@ -178,6 +206,7 @@ async function verifyTron(
   expected: string,
   txid: string,
   contract: string,
+  notBefore: number,
 ): Promise<Verdict> {
   const body = (await getJson(`https://api.trongrid.io/v1/transactions/${txid}/events`)) as {
     data?: {
@@ -220,6 +249,9 @@ async function verifyTron(
     // ponytail: 用「出块过了 60 秒」代替数确认数。Tron 固定 3 秒一块、19 块不可逆，
     // 60 秒约 20 块，已过终局点。要精确得再调一次接口拿当前块高。
     confirmed: Date.now() - minedAt >= 60_000,
+    // TronGrid 给的就是毫秒
+    at: minedAt,
+    notBefore,
   })
 }
 
@@ -231,6 +263,7 @@ async function verifySolana(
   expected: string,
   txid: string,
   contract: string,
+  notBefore: number,
 ): Promise<Verdict> {
   const body = (await getJson('https://api.mainnet-beta.solana.com', {
     method: 'POST',
@@ -243,6 +276,7 @@ async function verifySolana(
     }),
   })) as {
     result?: {
+      blockTime?: number
       meta?: {
         err?: unknown
         preTokenBalances?: TokenBalance[]
@@ -272,6 +306,9 @@ async function verifySolana(
     expected: toUnits(expected, after?.uiTokenAmount?.decimals ?? 6),
     // 上面要的就是 finalized，能返回结果就已经不可逆
     confirmed: true,
+    // Solana 给的是秒
+    at: (body?.result?.blockTime ?? 0) * 1000,
+    notBefore,
   })
 }
 
@@ -283,23 +320,25 @@ type TokenBalance = {
 
 // ---------- 入口 ----------
 
+/** notBefore 传订单创建时间（毫秒），早于它的转账一律不认 */
 export async function verifyPayment(
   item: Asset,
   address: string,
   expected: string,
   txid: string,
+  notBefore: number,
 ): Promise<Verdict> {
   switch (item.networkKey) {
     case 'bitcoin':
     case 'litecoin':
-      return verifyEsplora(item.networkKey, address, expected, txid)
+      return verifyEsplora(item.networkKey, address, expected, txid, notBefore)
     case 'tron':
       return item.contract
-        ? verifyTron(address, expected, txid, item.contract)
+        ? verifyTron(address, expected, txid, item.contract, notBefore)
         : { state: 'manual', message: '这条链暂不自动核验' }
     case 'solana':
       return item.contract
-        ? verifySolana(address, expected, txid, item.contract)
+        ? verifySolana(address, expected, txid, item.contract, notBefore)
         : { state: 'manual', message: '这条链暂不自动核验' }
     default:
       // 以太坊和 BSC 没有免费无密钥的公开端点，交人工——

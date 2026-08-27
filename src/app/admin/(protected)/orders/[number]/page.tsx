@@ -140,12 +140,27 @@ export default async function AdminOrderDetail({ params }: Props) {
                       {order.cryptoVerifiedAt.toLocaleString('zh-CN', { hour12: false })}
                     </span>
                   </p>
+                ) : order.status === 'CANCELLED' ? (
+                  order.cryptoTxid && (
+                    <p className="mb-3 bg-red-50 px-3 py-2 text-xs text-red-900">
+                      订单已取消，但客户回填了转账哈希 —— 钱可能真的到账了。
+                      点下面的链接核一下，再决定退款还是恢复订单。
+                    </p>
+                  )
                 ) : (
                   order.status !== 'PENDING' && (
                     <p className="mb-3 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                       人工确认收款，未经链上核实
                     </p>
                   )
+                )}
+                {order.cryptoAddress && (
+                  <div className="mb-3">
+                    <p className="text-xs text-faint">下单时报给客户的收款地址</p>
+                    <p className="mt-1.5 font-mono text-xs break-all text-muted">
+                      {order.cryptoAddress}
+                    </p>
+                  </div>
                 )}
                 <p className="text-xs text-faint">客户回填的 TXID</p>
                 {order.cryptoTxid && paid ? (
