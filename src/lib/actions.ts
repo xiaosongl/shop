@@ -10,9 +10,10 @@ import { searchByImage, type ImageSearchResult } from './image-search'
 import { sniffImage } from './images'
 import { MAX_IMAGE_BYTES } from './vision'
 import { amountFor, asset, isAssetKey } from './crypto'
-import { PAYMENT_METHOD_KEYS, rateCentsFor, whatsappNumber } from './payments'
+import { PAYMENT_METHOD_KEYS, localChatReady, rateCentsFor } from './payments'
 import { allow } from './rate-limit'
 import { payableAsset } from './wallets'
+import { GRADES, lineKey, parseGrade, priceFor, type GradeKey } from './grades'
 import {
   MAX_QUANTITY,
   SHIPPING_METHOD_KEYS,
@@ -26,6 +27,7 @@ const linesSchema = z
   .array(
     z.object({
       variantId: z.string().min(1).max(64),
+      grade: z.string().max(32).optional(),
       // 上限故意不在这里卡死：单行超标会让整个数组解析失败、购物车变空，
       // 而下面的循环本来就会 clamp 到 MAX_QUANTITY 并记进 clamped 告诉前端。
       quantity: z.number().int().min(1),
@@ -34,7 +36,9 @@ const linesSchema = z
   .max(50)
 
 export type ResolvedLine = {
+  key: string
   variantId: string
+  grade: GradeKey
   slug: string
   title: string
   brandName: string
@@ -56,8 +60,8 @@ export type ResolvedCart = Totals & {
   clamped: string[]
 }
 
-function label(size: string | null, color: string | null) {
-  return [color, size].filter(Boolean).join(' / ') || 'One size'
+function label(grade: GradeKey, size: string | null, color: string | null) {
+  return [GRADES[grade].label, color, size].filter(Boolean).join(' / ')
 }
 
 function emptyCart(method: ShippingMethod): ResolvedCart {
@@ -79,16 +83,23 @@ export async function resolveCart(input: unknown, shipping?: string): Promise<Re
   const parsed = linesSchema.safeParse(input)
   if (!parsed.success || parsed.data.length === 0) return emptyCart(method)
 
-  // 先按 SKU 合并。同一个 SKU 拆成五十行、每行 10 件就是 500 件，
-  // 上限得按 SKU 算才作数。正常客户端不会产生重复行（加购是累加到同一行），
-  // 这是挡手工构造的请求拿弃单去锁库存。
-  const wanted = new Map<string, number>()
+  // 先按 SKU + 等级合并。同一个规格拆成五十行、每行 10 件就是 500 件，
+  // 上限得按行算才作数。库存仍按 SKU 共享，三个等级抢同一池。
+  const wanted = new Map<string, { variantId: string; grade: GradeKey; quantity: number }>()
   for (const line of parsed.data) {
-    wanted.set(line.variantId, (wanted.get(line.variantId) ?? 0) + line.quantity)
+    const grade = parseGrade(line.grade)
+    if (grade === 'preowned') continue
+    const key = lineKey(line.variantId, grade)
+    const prev = wanted.get(key)
+    wanted.set(key, {
+      variantId: line.variantId,
+      grade,
+      quantity: (prev?.quantity ?? 0) + line.quantity,
+    })
   }
 
   const variants = await db.productVariant.findMany({
-    where: { id: { in: [...wanted.keys()] }, product: { status: 'ACTIVE' } },
+    where: { id: { in: [...new Set([...wanted.values()].map((line) => line.variantId))] }, product: { status: 'ACTIVE' } },
     select: {
       id: true,
       size: true,
@@ -111,31 +122,47 @@ export async function resolveCart(input: unknown, shipping?: string): Promise<Re
   const lines: ResolvedLine[] = []
   const removed: string[] = []
   const clamped: string[] = []
+  const remaining = new Map<string, number>()
 
-  for (const [variantId, asked] of wanted) {
-    const variant = byId.get(variantId)
+  for (const [key, asked] of wanted) {
+    const variant = byId.get(asked.variantId)
     // 售罄的也归到 removed：留在购物车里点不了结算，不如直接清掉并告知
     if (!variant || variant.stock <= 0) {
-      removed.push(variantId)
+      removed.push(key)
       continue
     }
 
-    const quantity = Math.min(asked, variant.stock, MAX_QUANTITY)
-    if (quantity !== asked) clamped.push(variantId)
+    if (!remaining.has(variant.id)) remaining.set(variant.id, variant.stock)
+    const left = remaining.get(variant.id) ?? 0
+    if (left <= 0) {
+      removed.push(key)
+      continue
+    }
+
+    const quantity = Math.min(asked.quantity, left, MAX_QUANTITY)
+    remaining.set(variant.id, left - quantity)
+    if (quantity !== asked.quantity) clamped.push(key)
 
     const image = variant.product.images[0]
+    const unitPriceCents = priceFor(variant.product.priceCents, asked.grade)
+    if (unitPriceCents == null) {
+      removed.push(key)
+      continue
+    }
     lines.push({
+      key,
       variantId: variant.id,
+      grade: asked.grade,
       slug: variant.product.slug,
       title: variant.product.title,
       brandName: variant.product.brand.name,
-      label: label(variant.size, variant.color),
+      label: label(asked.grade, variant.size, variant.color),
       imageUrl: image?.url ?? '',
       blurDataUrl: image?.blurDataUrl ?? '',
-      unitPriceCents: variant.product.priceCents,
-      compareAtCents: variant.product.compareAtCents,
+      unitPriceCents,
+      compareAtCents: asked.grade === 'premium' ? variant.product.compareAtCents : null,
       quantity,
-      stock: variant.stock,
+      stock: left,
     })
   }
 
@@ -195,7 +222,7 @@ export async function placeOrder(input: unknown, formData: unknown): Promise<Pla
   if (data.paymentMethod === 'crypto' && !chosen) {
     return { ok: false, fieldErrors: {}, message: 'That payment coin is unavailable right now.' }
   }
-  if (data.paymentMethod === 'whatsapp' && !whatsappNumber()) {
+  if (data.paymentMethod === 'whatsapp' && !localChatReady()) {
     return { ok: false, fieldErrors: {}, message: 'Local payment is unavailable right now.' }
   }
 
@@ -232,10 +259,14 @@ export async function placeOrder(input: unknown, formData: unknown): Promise<Pla
 
   try {
     const number = await db.$transaction(async (tx) => {
+      const need = new Map<string, number>()
       for (const line of cart.lines) {
+        need.set(line.variantId, (need.get(line.variantId) ?? 0) + line.quantity)
+      }
+      for (const [variantId, quantity] of need) {
         const updated = await tx.productVariant.updateMany({
-          where: { id: line.variantId, stock: { gte: line.quantity } },
-          data: { stock: { decrement: line.quantity } },
+          where: { id: variantId, stock: { gte: quantity } },
+          data: { stock: { decrement: quantity } },
         })
         if (updated.count === 0) throw new Error('OUT_OF_STOCK')
       }

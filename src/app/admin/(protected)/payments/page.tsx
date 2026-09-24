@@ -1,8 +1,10 @@
 import { WalletForm } from '@/components/admin/wallet-form'
 import { PageHeader } from '@/components/admin/ui'
+import { assertAdminPage } from '@/lib/admin-auth'
 import { walletSettings } from '@/lib/wallets'
 
 export default async function AdminPayments() {
+  await assertAdminPage()
   const wallets = await walletSettings()
 
   return (

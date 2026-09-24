@@ -1,5 +1,8 @@
 import { db } from './db'
 
+/** 新建规格和一键上架都用这个数。已有 SKU 的库存仍由运营改，不会被表单覆盖。 */
+export const DEFAULT_STOCK = 1000
+
 /**
  * 按「颜色 × 尺码」把规格拉平成 SKU 行。
  *
@@ -51,7 +54,7 @@ export async function syncVariants(
         data: { size: combo.size, color: combo.color, colorHex: combo.colorHex },
       })
     } else {
-      await db.productVariant.create({ data: { productId, sku, ...combo, stock: 0 } })
+      await db.productVariant.create({ data: { productId, sku, ...combo, stock: DEFAULT_STOCK } })
     }
   }
 

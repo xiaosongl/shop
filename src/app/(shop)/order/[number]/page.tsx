@@ -15,7 +15,7 @@ import {
   type OrderStatus,
   trackingUrl,
 } from '@/lib/order-status'
-import { whatsappLink } from '@/lib/payments'
+import { messengerHandle, messengerLink, whatsappLink, whatsappNumber } from '@/lib/payments'
 import { payableAsset } from '@/lib/wallets'
 import { SHIPPING_METHODS, isShippingMethod } from '@/lib/totals'
 
@@ -121,18 +121,32 @@ export default async function OrderPage({ params }: Props) {
         <section className="mt-10 mb-12 border border-line p-6 text-center md:p-8">
           <h2 className="label-xs text-faint">Local payment</h2>
           <p className="mx-auto mt-4 max-w-md text-sm leading-relaxed text-muted">
-            Message us on WhatsApp and we&rsquo;ll send an invoice for{' '}
+            Message us on WhatsApp or Messenger and we&rsquo;ll send an invoice for{' '}
             {formatPrice(order.totalCents)}, payable by credit card, PayPal, or your usual local
             wallet. Your items stay reserved until then.
           </p>
-          <a
-            href={whatsappLink(order.number, formatPrice(order.totalCents))}
-            target="_blank"
-            rel="noreferrer noopener"
-            className="mt-6 inline-block bg-ink px-8 py-3.5 text-sm text-white transition-opacity hover:opacity-85"
-          >
-            Open WhatsApp
-          </a>
+          <div className="mt-6 flex flex-col items-center justify-center gap-2 sm:flex-row">
+            {whatsappNumber() && (
+              <a
+                href={whatsappLink(order.number, formatPrice(order.totalCents))}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="inline-block bg-ink px-8 py-3.5 text-sm text-white transition-opacity hover:opacity-85"
+              >
+                Open WhatsApp
+              </a>
+            )}
+            {messengerHandle() && (
+              <a
+                href={messengerLink(order.number, formatPrice(order.totalCents))}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="inline-block border border-ink px-8 py-3.5 text-sm transition-colors hover:bg-ink hover:text-white"
+              >
+                Open Messenger
+              </a>
+            )}
+          </div>
         </section>
       )}
 

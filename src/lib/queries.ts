@@ -277,6 +277,85 @@ export async function getBrands() {
     .filter((brand) => brand.genders.length > 0)
 }
 
+/**
+ * 首页和 /brands 的品牌墙。不按性别拆：一个品牌一行，封面优先用后台传的图。
+ */
+export async function getBrandIndex() {
+  const active = { status: 'ACTIVE' } satisfies Prisma.ProductWhereInput
+
+  const [brands, covers] = await Promise.all([
+    db.brand.findMany({
+      orderBy: [{ position: 'asc' }, { name: 'asc' }],
+      select: {
+        slug: true,
+        name: true,
+        description: true,
+        imageUrl: true,
+        imageBlur: true,
+        _count: { select: { products: { where: active } } },
+      },
+    }),
+    db.productImage.findMany({
+      where: { position: 0, product: active },
+      orderBy: [{ product: { featured: 'desc' } }, { product: { createdAt: 'asc' } }],
+      select: {
+        url: true,
+        blurDataUrl: true,
+        product: { select: { brand: { select: { slug: true } } } },
+      },
+    }),
+  ])
+
+  const cover = new Map<string, { url: string; blurDataUrl: string }>()
+  for (const image of covers) {
+    const slug = image.product.brand.slug
+    if (!cover.has(slug)) cover.set(slug, { url: image.url, blurDataUrl: image.blurDataUrl })
+  }
+
+  return brands
+    .filter((brand) => brand._count.products > 0)
+    .map((brand) => ({
+      slug: brand.slug,
+      name: brand.name,
+      description: brand.description,
+      count: brand._count.products,
+      image: coverOf(brand, cover.get(brand.slug)),
+    }))
+}
+
+/** /brands/[brand]：品牌不存在或没有在售商品就当没有这个页 */
+export async function getBrandCatalog(brandSlug: string) {
+  const brand = await db.brand.findUnique({
+    where: { slug: brandSlug },
+    select: { id: true, slug: true, name: true, description: true },
+  })
+  if (!brand) return null
+
+  const active = { status: 'ACTIVE', brandId: brand.id } satisfies Prisma.ProductWhereInput
+  const [parents, products] = await Promise.all([
+    db.category.findMany({
+      where: { parentId: null },
+      orderBy: { position: 'asc' },
+      select: { slug: true, name: true, children: { select: { id: true } } },
+    }),
+    db.product.findMany({
+      where: active,
+      select: { categoryId: true },
+    }),
+  ])
+
+  const categories = parents
+    .map((parent) => {
+      const ids = new Set(parent.children.map((child) => child.id))
+      const count = products.filter((product) => ids.has(product.categoryId)).length
+      return { slug: parent.slug, name: parent.name, count }
+    })
+    .filter((parent) => parent.count > 0)
+
+  if (!products.length) return null
+  return { brand, categories }
+}
+
 /** 某品牌某性别下真正有货的一级类别，带封面图和件数 */
 export async function getBrandCategories(brandId: string, gender: GenderSlug) {
   const scope = { ...activeIn(gender), brandId }

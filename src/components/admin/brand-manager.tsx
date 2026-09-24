@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useState, useTransition } from 'react'
 import { deleteBrand, saveBrand } from '@/lib/admin-actions'
 import { ImageField } from './image-field'
-import { Card, Field, inputClass, Table } from './ui'
+import { Card, Empty, Field, inputClass, Table } from './ui'
 
 type Brand = {
   id: string
@@ -17,7 +17,7 @@ type Brand = {
   _count: { products: number }
 }
 
-export function BrandManager({ brands }: { brands: Brand[] }) {
+export function BrandManager({ brands, empty = '还没有品牌' }: { brands: Brand[]; empty?: string }) {
   const router = useRouter()
   const [editing, setEditing] = useState<Brand | null>(null)
   const [creating, setCreating] = useState(false)
@@ -58,7 +58,14 @@ export function BrandManager({ brands }: { brands: Brand[] }) {
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
       <Table head={['品牌', 'slug', '商品数', '排序', '']}>
-        {brands.map((brand) => (
+        {brands.length === 0 ? (
+          <tr>
+            <td colSpan={5}>
+              <Empty>{empty}</Empty>
+            </td>
+          </tr>
+        ) : (
+          brands.map((brand) => (
           <tr key={brand.id} className="hover:bg-shell">
             <td className="px-4 py-3">
               <span className="flex items-center gap-3">
@@ -101,7 +108,8 @@ export function BrandManager({ brands }: { brands: Brand[] }) {
               </button>
             </td>
           </tr>
-        ))}
+          ))
+        )}
       </Table>
 
       <div>
@@ -125,7 +133,7 @@ export function BrandManager({ brands }: { brands: Brand[] }) {
               <Field name="name" label="名称" error={errors.name}>
                 <input id="name" name="name" required defaultValue={editing?.name} className={inputClass} />
               </Field>
-              <Field name="slug" label="slug" error={errors.slug} hint="前台地址 /men/这里">
+              <Field name="slug" label="slug" error={errors.slug} hint="前台地址 /brands/这里">
                 <input id="slug" name="slug" required defaultValue={editing?.slug} className={inputClass} />
               </Field>
               <Field name="description" label="简介" error={errors.description}>

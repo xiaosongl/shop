@@ -38,7 +38,7 @@ export function CartView() {
       <div className="mt-8 lg:grid lg:grid-cols-[minmax(0,1fr)_20rem] lg:gap-16">
         <ul className="divide-y divide-line border-y border-line">
           {data.lines.map((line) => (
-            <li key={line.variantId} className="flex gap-5 py-6">
+            <li key={line.key} className="flex gap-5 py-6">
               <Link
                 href={`/p/${line.slug}`}
                 className="relative aspect-[4/5] w-24 shrink-0 overflow-hidden bg-shell sm:w-28"
@@ -74,7 +74,7 @@ export function CartView() {
                   <div className="flex items-center border border-line">
                     <Step
                       label="Decrease quantity"
-                      onClick={() => setQuantity(line.variantId, line.quantity - 1)}
+                      onClick={() => setQuantity(line.key, line.quantity - 1)}
                     >
                       −
                     </Step>
@@ -82,7 +82,7 @@ export function CartView() {
                     <Step
                       label="Increase quantity"
                       disabled={line.quantity >= Math.min(line.stock, MAX_QUANTITY)}
-                      onClick={() => setQuantity(line.variantId, line.quantity + 1)}
+                      onClick={() => setQuantity(line.key, line.quantity + 1)}
                     >
                       +
                     </Step>
@@ -90,7 +90,7 @@ export function CartView() {
 
                   <button
                     type="button"
-                    onClick={() => remove(line.variantId)}
+                    onClick={() => remove(line.key)}
                     className="label-xs text-faint hover:text-ink"
                   >
                     Remove

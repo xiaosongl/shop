@@ -1,8 +1,10 @@
 import { AppearanceForm } from '@/components/admin/appearance-form'
 import { PageHeader } from '@/components/admin/ui'
+import { assertAdminPage } from '@/lib/admin-auth'
 import { getShowcases } from '@/lib/queries'
 
 export default async function AdminAppearance() {
+  await assertAdminPage()
   const showcases = await getShowcases()
 
   return (

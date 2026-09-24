@@ -3,16 +3,11 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { GENDERS, GENDER_SLUGS } from '@/lib/taxonomy'
-import { useCurrentGender, type BrandLink } from './site-nav'
+import type { BrandLink } from './site-nav'
 
 export function MobileNav({ brands }: { brands: BrandLink[] }) {
   const [open, setOpen] = useState(false)
   const pathname = usePathname()
-  const current = useCurrentGender()
-  const [gender, setGender] = useState(current)
-  // 这个性别没货的品牌点进去是 404，抽屉里就别列
-  const listed = brands.filter((brand) => brand.genders.includes(gender))
 
   // 跳转后自动收起，否则返回时抽屉还开着
   useEffect(() => setOpen(false), [pathname])
@@ -31,10 +26,7 @@ export function MobileNav({ brands }: { brands: BrandLink[] }) {
     <>
       <button
         type="button"
-        onClick={() => {
-          setGender(current)
-          setOpen(true)
-        }}
+        onClick={() => setOpen(true)}
         aria-label="Open menu"
         className="-ml-2 p-2 md:hidden"
       >
@@ -66,23 +58,6 @@ export function MobileNav({ brands }: { brands: BrandLink[] }) {
               </button>
             </div>
 
-            {/* 抽屉里先切性别再选品牌，跟站点的浏览顺序一致 */}
-            <div className="flex border-b border-line">
-              {GENDER_SLUGS.map((slug) => (
-                <button
-                  key={slug}
-                  type="button"
-                  onClick={() => setGender(slug)}
-                  aria-current={slug === gender ? 'page' : undefined}
-                  className={`flex-1 border-b-2 py-3.5 text-sm transition-colors ${
-                    slug === gender ? 'border-ink text-ink' : 'border-transparent text-muted'
-                  }`}
-                >
-                  {GENDERS[slug].label}
-                </button>
-              ))}
-            </div>
-
             <nav className="flex-1 overflow-y-auto px-5 py-6">
               <form action="/search">
                 <input
@@ -93,23 +68,26 @@ export function MobileNav({ brands }: { brands: BrandLink[] }) {
                 />
               </form>
 
-              {/* 手机上多半是拿着一张微信里存下来的图来找货，比打字靠谱 */}
               <Link href="/search" className="mt-3 mb-8 block text-sm text-muted">
                 Search by photo
               </Link>
 
-              <Link href={`/${gender}`} className="label-xs text-faint">
-                All {GENDERS[gender].label.toLowerCase()} brands
+              <Link href="/new" className="mb-4 block text-sm text-muted">
+                New arrivals
+              </Link>
+
+              <Link href="/grades" className="mb-6 block text-sm text-muted">
+                Our grades
+              </Link>
+
+              <Link href="/brands" className="label-xs text-faint">
+                All {brands.length} brands
               </Link>
 
               <ul className="mt-2">
-                {listed.map((brand) => (
+                {brands.map((brand) => (
                   <li key={brand.slug}>
-                    {/* 抽屉里全是并排的链接，每条撑到 44px 手指才不会点串行 */}
-                    <Link
-                      href={`/${gender}/${brand.slug}`}
-                      className="flex min-h-11 items-center text-[15px]"
-                    >
+                    <Link href={`/brands/${brand.slug}`} className="flex min-h-11 items-center text-[15px]">
                       {brand.name}
                     </Link>
                   </li>
@@ -117,11 +95,7 @@ export function MobileNav({ brands }: { brands: BrandLink[] }) {
               </ul>
             </nav>
 
-            {/* 手机上头部塞不下 Orders，放抽屉底部固定露出 */}
-            <Link
-              href="/orders"
-              className="border-t border-line px-5 py-4 text-sm text-muted hover:text-ink"
-            >
+            <Link href="/orders" className="border-t border-line px-5 py-4 text-sm text-muted hover:text-ink">
               Track your order
             </Link>
           </div>

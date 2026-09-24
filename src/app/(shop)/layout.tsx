@@ -1,5 +1,6 @@
 import { BottomNav } from '@/components/bottom-nav'
 import { BrowserGuard } from '@/components/browser-guard'
+import { CartDrawer } from '@/components/cart-drawer'
 import { SiteFooter } from '@/components/site-footer'
 import { SiteHeader } from '@/components/site-header'
 import { CartProvider } from '@/lib/cart'
@@ -18,6 +19,7 @@ export default function ShopLayout({ children }: { children: React.ReactNode }) 
       <main className="min-h-[60vh]">{children}</main>
       <SiteFooter />
 
+      <CartDrawer />
       <BottomNav />
       {/* 底部导航是 fixed 的，垫一块等高的占位，否则页脚最后一行永远被压着。
           1px 是导航条自己的上边框，漏掉就正好差一条线的高度 */}

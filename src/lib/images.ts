@@ -116,7 +116,12 @@ export async function processImage(
     const file = path.join(outDir, `${key}-${width}.webp`)
     if (await exists(file)) continue
     await sharp(source)
-      .resize(width, Math.round(width * RATIO), { fit: 'cover', position: 'attention' })
+      .resize(width, Math.round(width * RATIO), {
+        fit: 'cover',
+        position: 'attention',
+        // 原图不够大就保持原尺寸。拉到 1600 再显示，缩略图会糊成一片
+        withoutEnlargement: true,
+      })
       .webp(ENCODE.main)
       .toFile(file)
   }

@@ -81,6 +81,7 @@ model Product {
   title          String
   description    String
   details        String? // 面料/尺码等，详情页折叠区，一行一条
+  videoUrl       String? // 详情页视频。远程 mp4/webm 直链，没有就是纯图
   priceCents     Int
   compareAtCents Int? // 划线原价
   status         String  @default("ACTIVE") // DRAFT | ACTIVE | ARCHIVED
@@ -138,7 +139,7 @@ model ProductVariant {
   size     String?
   color    String?
   colorHex String?
-  stock    Int     @default(0)
+  stock    Int     @default(1000)
 
   orderItems OrderItem[]
 

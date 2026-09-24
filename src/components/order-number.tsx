@@ -51,7 +51,7 @@ export function OrderNumber({ number }: { number: string }) {
 
       <p className="mx-auto mt-5 max-w-sm text-xs leading-relaxed text-faint">
         Keep this somewhere safe — it&rsquo;s how you track your order and how we find you on
-        WhatsApp.
+        WhatsApp or Messenger.
         {saved && ` We've also saved it in this browser for ${ORDER_MEMORY_DAYS} days.`}
       </p>
     </section>

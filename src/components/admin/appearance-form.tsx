@@ -11,6 +11,7 @@ import {
   type ShowcaseEntry,
   type ShowcaseKey,
 } from '@/lib/showcase'
+import { FilterInput } from './filter-input'
 import { ImageField } from './image-field'
 import { Card, Field, inputClass } from './ui'
 
@@ -19,6 +20,8 @@ export function AppearanceForm({ showcases }: { showcases: Record<ShowcaseKey, S
   const [pending, startTransition] = useTransition()
   const [message, setMessage] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
+  const [query, setQuery] = useState('')
+  const needle = query.trim().toLowerCase()
 
   function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -39,13 +42,23 @@ export function AppearanceForm({ showcases }: { showcases: Record<ShowcaseKey, S
 
   return (
     <form onSubmit={onSubmit} className="max-w-3xl space-y-5">
+      <FilterInput value={query} onChange={setQuery} placeholder="搜索文案位置" />
+      {needle &&
+        !SHOWCASE_KEYS.some((key) => {
+          const meta = SHOWCASE_LABELS[key]
+          return meta.title.toLowerCase().includes(needle) || meta.hint.toLowerCase().includes(needle)
+        }) && <p className="text-sm text-faint">没有匹配的文案位置</p>}
       {SHOWCASE_KEYS.map((key) => {
         const entry = showcases[key]
         const fallback = SHOWCASE_FALLBACK[key]
         const meta = SHOWCASE_LABELS[key]
+        const hit =
+          !needle ||
+          meta.title.toLowerCase().includes(needle) ||
+          meta.hint.toLowerCase().includes(needle)
 
         return (
-          <Card key={key} className="space-y-5 p-5">
+          <Card key={key} className={hit ? 'space-y-5 p-5' : 'hidden'}>
             <div>
               <h2 className="text-sm">{meta.title}</h2>
               <p className="mt-0.5 text-xs text-faint">{meta.hint}</p>

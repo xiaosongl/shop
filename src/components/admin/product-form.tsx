@@ -4,6 +4,7 @@ import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import { useState, useTransition } from 'react'
 import { deleteProductImage, saveProduct, setVariantStock } from '@/lib/admin-actions'
+import { ProductRowActions } from './product-actions'
 import { Card, Field, inputClass } from './ui'
 
 type Option = { id: string; name: string }
@@ -22,6 +23,7 @@ export type ProductFormValues = {
   priceCents: number
   compareAtCents: number | null
   featured: boolean
+  videoUrl: string | null
   images: { id: string; url: string }[]
   variants: {
     id: string
@@ -107,6 +109,20 @@ export function ProductForm({
               required
               rows={4}
               defaultValue={product?.description}
+              className={inputClass}
+            />
+          </Field>
+
+          <Field
+            name="videoUrl"
+            label="视频链接"
+            error={errors.videoUrl}
+            hint="选填。https 的 mp4 / webm 直链，详情页排在图片前面播放。留空则没有视频"
+          >
+            <input
+              id="videoUrl"
+              name="videoUrl"
+              defaultValue={product?.videoUrl ?? ''}
               className={inputClass}
             />
           </Field>
@@ -213,7 +229,7 @@ export function ProductForm({
             <select id="status" name="status" defaultValue={product?.status ?? 'DRAFT'} className={inputClass}>
               <option value="DRAFT">草稿（前台不显示）</option>
               <option value="ACTIVE">在售</option>
-              <option value="ARCHIVED">已归档</option>
+              <option value="ARCHIVED">下架（前台不显示）</option>
             </select>
           </Field>
 
@@ -260,7 +276,12 @@ export function ProductForm({
         </Card>
 
         <Card className="space-y-5 p-5">
-          <Field name="priceCents" label="售价（美分）" error={errors.priceCents} hint="4500 = $45.00">
+          <Field
+            name="priceCents"
+            label="售价（美分）· Premium"
+            error={errors.priceCents}
+            hint="导入和前台的 Premium 价。Exclusive 自动加 $90–$150；Authentic pre-owned 同这个价。"
+          >
             <input
               id="priceCents"
               name="priceCents"
@@ -304,6 +325,16 @@ export function ProductForm({
           >
             {pending ? '保存中…' : '保存'}
           </button>
+          {product && (
+            <div className="flex justify-end pt-1">
+              <ProductRowActions
+                id={product.id}
+                title={product.title}
+                status={product.status}
+                afterDelete="list"
+              />
+            </div>
+          )}
         </div>
       </div>
     </form>

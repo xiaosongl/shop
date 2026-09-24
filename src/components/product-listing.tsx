@@ -131,7 +131,17 @@ export async function ProductListing({
 
           {pageCount > 1 && (
             <nav className="mt-16 flex items-center justify-center gap-1">
-              {Array.from({ length: pageCount }, (_, index) => index + 1).map((page) => (
+              {filters.page > 1 && (
+                <Link
+                  href={hrefWith(basePath, searchParams, {
+                    page: filters.page === 2 ? null : String(filters.page - 1),
+                  })}
+                  className="px-3 pt-2 text-sm text-muted hover:text-ink"
+                >
+                  Prev
+                </Link>
+              )}
+              {pageWindow(filters.page, pageCount).map((page) => (
                 <Link
                   key={page}
                   href={hrefWith(basePath, searchParams, { page: page === 1 ? null : String(page) })}
@@ -142,10 +152,26 @@ export async function ProductListing({
                   {page}
                 </Link>
               ))}
+              {filters.page < pageCount && (
+                <Link
+                  href={hrefWith(basePath, searchParams, { page: String(filters.page + 1) })}
+                  className="px-3 pt-2 text-sm text-muted hover:text-ink"
+                >
+                  Next
+                </Link>
+              )}
             </nav>
           )}
         </div>
       </div>
     </div>
   )
+}
+
+/** 页数一多就把页码收成当前页附近的一段，避免几十个按钮排成一条。 */
+function pageWindow(current: number, total: number) {
+  const width = 7
+  if (total <= width) return Array.from({ length: total }, (_, index) => index + 1)
+  const start = Math.max(1, Math.min(current - 3, total - width + 1))
+  return Array.from({ length: width }, (_, index) => start + index)
 }

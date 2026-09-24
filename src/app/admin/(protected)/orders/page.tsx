@@ -1,5 +1,15 @@
 import Link from 'next/link'
-import { Badge, Empty, PageHeader, Pager, STATUS_LABEL, Table, pageFrom } from '@/components/admin/ui'
+import {
+  Badge,
+  Empty,
+  PageHeader,
+  Pager,
+  Search,
+  STATUS_LABEL,
+  Table,
+  pageFrom,
+  queryFrom,
+} from '@/components/admin/ui'
 import { db } from '@/lib/db'
 import { formatPrice } from '@/lib/format'
 import { ORDER_STATUSES } from '@/lib/order-status'
@@ -10,20 +20,30 @@ const STATUSES: readonly string[] = ORDER_STATUSES
 export default async function AdminOrders({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string; page?: string }>
+  searchParams: Promise<{ status?: string; q?: string; page?: string }>
 }) {
-  const { status, page: pageParam } = await searchParams
+  const { status, q, page: pageParam } = await searchParams
   const active = status && STATUSES.includes(status) ? status : null
+  const query = queryFrom(q)
+  const searchWhere = query
+    ? {
+        OR: [
+          { number: { contains: query } },
+          { email: { contains: query } },
+          { name: { contains: query } },
+        ],
+      }
+    : {}
 
   // 筛选标签上本来就要显示各状态的笔数，总数直接从这里加出来，不用再数一遍
-  const counts = await db.order.groupBy({ by: ['status'], _count: true })
+  const counts = await db.order.groupBy({ by: ['status'], _count: true, where: searchWhere })
   const countFor = (value: string) => counts.find((row) => row.status === value)?._count ?? 0
   const all = counts.reduce((sum, row) => sum + row._count, 0)
 
   const { page, pages, skip, take } = pageFrom(pageParam, active ? countFor(active) : all)
 
   const orders = await db.order.findMany({
-    where: active ? { status: active } : {},
+    where: { ...searchWhere, ...(active ? { status: active } : {}) },
     orderBy: { createdAt: 'desc' },
     skip,
     take,
@@ -39,16 +59,25 @@ export default async function AdminOrders({
     },
   })
 
+  const keep = { status: active ?? undefined, q: query || undefined }
+
   return (
     <>
       <PageHeader title="订单" count={`共 ${all} 笔`} />
 
+      <Search
+        action="/admin/orders"
+        q={query}
+        keep={{ status: active ?? undefined }}
+        placeholder="搜索单号、邮箱或姓名"
+      />
+
       <div className="mb-5 flex flex-wrap gap-2">
-        <Filter href="/admin/orders" label="全部" active={!active} />
+        <Filter href={ordersHref({ q: query || undefined })} label="全部" active={!active} />
         {STATUSES.map((value) => (
           <Filter
             key={value}
-            href={`/admin/orders?status=${value}`}
+            href={ordersHref({ status: value, q: query || undefined })}
             label={`${STATUS_LABEL[value]} ${countFor(value)}`}
             active={active === value}
           />
@@ -94,14 +123,17 @@ export default async function AdminOrders({
         )}
       </Table>
 
-      <Pager
-        path="/admin/orders"
-        params={{ status: active ?? undefined }}
-        page={page}
-        pages={pages}
-      />
+      <Pager path="/admin/orders" params={keep} page={page} pages={pages} />
     </>
   )
+}
+
+function ordersHref(params: { status?: string; q?: string }) {
+  const query = new URLSearchParams()
+  if (params.status) query.set('status', params.status)
+  if (params.q) query.set('q', params.q)
+  const search = query.toString()
+  return search ? `/admin/orders?${search}` : '/admin/orders'
 }
 
 function Filter({ href, label, active }: { href: string; label: string; active: boolean }) {

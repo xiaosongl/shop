@@ -2,22 +2,26 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { resolveCart, type ResolvedCart } from './actions'
+import { parseGrade, lineKey, type GradeKey } from './grades'
 import { clampQuantity, type ShippingMethod } from './totals'
 
 const STORAGE_KEY = 'northsound.cart.v1'
 
-// 只存 SKU 和数量，不存价格。价格一律在服务端按当前数据库重新计算，
+// 只存 SKU、等级和数量，不存价格。价格一律在服务端按当前数据库重新计算，
 // 这样就算有人改了 localStorage 也改不动金额。
-export type CartLine = { variantId: string; quantity: number }
+export type CartLine = { variantId: string; grade: GradeKey; quantity: number }
 
 type CartApi = {
   lines: CartLine[]
   count: number
   /** 首次从 localStorage 读完之前是 false，用来避免 SSR 和客户端数字对不上 */
   ready: boolean
-  add: (variantId: string, quantity?: number) => void
-  setQuantity: (variantId: string, quantity: number) => void
-  remove: (variantId: string) => void
+  drawerOpen: boolean
+  openCart: () => void
+  closeCart: () => void
+  add: (variantId: string, quantity?: number, grade?: GradeKey, openDrawer?: boolean) => void
+  setQuantity: (key: string, quantity: number) => void
+  remove: (key: string) => void
   clear: () => void
 }
 
@@ -29,23 +33,33 @@ function read(): CartLine[] {
     if (!raw) return []
     const parsed: unknown = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
-    // 逐行收敛，坏行只丢自己。数量在这里就夹进合法区间，
-    // 于是加购没设上限那版留下的超额行一进来就被治好了。
+    // 逐行收敛，坏行只丢自己。没写等级或旧 Classic 并进 Premium。
     return parsed.flatMap((line): CartLine[] => {
       if (typeof line !== 'object' || line === null) return []
-      const { variantId, quantity } = line as Partial<CartLine>
+      const { variantId, quantity, grade } = line as Partial<CartLine> & { grade?: unknown }
       if (typeof variantId !== 'string' || !variantId) return []
       if (typeof quantity !== 'number') return []
-      return [{ variantId, quantity: clampQuantity(quantity) }]
+      return [
+        {
+          variantId,
+          grade: parseGrade(grade),
+          quantity: clampQuantity(quantity),
+        },
+      ]
     })
   } catch {
     return []
   }
 }
 
+function sameLine(left: CartLine, variantId: string, grade: GradeKey) {
+  return left.variantId === variantId && left.grade === grade
+}
+
 export function CartProvider({ children }: { children: React.ReactNode }) {
   const [lines, setLines] = useState<CartLine[]>([])
   const [ready, setReady] = useState(false)
+  const [drawerOpen, setDrawerOpen] = useState(false)
 
   useEffect(() => {
     setLines(read())
@@ -66,31 +80,37 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener('storage', onStorage)
   }, [])
 
-  const add = useCallback((variantId: string, quantity = 1) => {
+  const openCart = useCallback(() => setDrawerOpen(true), [])
+  const closeCart = useCallback(() => setDrawerOpen(false), [])
+
+  const add = useCallback((variantId: string, quantity = 1, grade: GradeKey = 'premium', openDrawer = true) => {
+    if (grade === 'preowned') return
     setLines((current) => {
-      const existing = current.find((line) => line.variantId === variantId)
-      if (!existing) return [...current, { variantId, quantity: clampQuantity(quantity) }]
-      // 累加要夹上限：第二次加购把总数顶过 MAX_QUANTITY 是最常见的正常操作
+      const existing = current.find((line) => sameLine(line, variantId, grade))
+      if (!existing) return [...current, { variantId, grade, quantity: clampQuantity(quantity) }]
       return current.map((line) =>
-        line.variantId === variantId
+        sameLine(line, variantId, grade)
           ? { ...line, quantity: clampQuantity(line.quantity + quantity) }
           : line,
       )
     })
+    if (openDrawer) setDrawerOpen(true)
   }, [])
 
-  const setQuantity = useCallback((variantId: string, quantity: number) => {
+  const setQuantity = useCallback((key: string, quantity: number) => {
     setLines((current) =>
       quantity <= 0
-        ? current.filter((line) => line.variantId !== variantId)
+        ? current.filter((line) => lineKey(line.variantId, line.grade) !== key)
         : current.map((line) =>
-            line.variantId === variantId ? { ...line, quantity: clampQuantity(quantity) } : line,
+            lineKey(line.variantId, line.grade) === key
+              ? { ...line, quantity: clampQuantity(quantity) }
+              : line,
           ),
     )
   }, [])
 
-  const remove = useCallback((variantId: string) => {
-    setLines((current) => current.filter((line) => line.variantId !== variantId))
+  const remove = useCallback((key: string) => {
+    setLines((current) => current.filter((line) => lineKey(line.variantId, line.grade) !== key))
   }, [])
 
   const clear = useCallback(() => setLines([]), [])
@@ -100,12 +120,15 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       lines,
       count: lines.reduce((sum, line) => sum + line.quantity, 0),
       ready,
+      drawerOpen,
+      openCart,
+      closeCart,
       add,
       setQuantity,
       remove,
       clear,
     }),
-    [lines, ready, add, setQuantity, remove, clear],
+    [lines, ready, drawerOpen, openCart, closeCart, add, setQuantity, remove, clear],
   )
 
   return <CartContext value={value}>{children}</CartContext>
@@ -141,10 +164,10 @@ export function useResolvedCart(shipping: ShippingMethod = 'boxed') {
       setData(result)
       setLoading(false)
 
-      for (const variantId of result.removed) remove(variantId)
+      for (const removedKey of result.removed) remove(removedKey)
       for (const line of result.lines) {
-        const local = lines.find((item) => item.variantId === line.variantId)
-        if (local && local.quantity !== line.quantity) setQuantity(line.variantId, line.quantity)
+        const local = lines.find((item) => lineKey(item.variantId, item.grade) === line.key)
+        if (local && local.quantity !== line.quantity) setQuantity(line.key, line.quantity)
       }
     })
 

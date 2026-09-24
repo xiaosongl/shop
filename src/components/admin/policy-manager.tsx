@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useState, useTransition } from 'react'
 import { deletePolicy, savePolicy } from '@/lib/admin-actions'
-import { Card, Field, inputClass, Table } from './ui'
+import { Card, Empty, Field, inputClass, Table } from './ui'
 
 type Policy = {
   slug: string
@@ -17,7 +17,13 @@ type Policy = {
 
 const day = new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' })
 
-export function PolicyManager({ policies }: { policies: Policy[] }) {
+export function PolicyManager({
+  policies,
+  empty = '还没有政策页',
+}: {
+  policies: Policy[]
+  empty?: string
+}) {
   const router = useRouter()
   const [editing, setEditing] = useState<Policy | null>(null)
   const [creating, setCreating] = useState(false)
@@ -173,7 +179,14 @@ export function PolicyManager({ policies }: { policies: Policy[] }) {
       )}
 
       <Table head={['标题', '地址', '状态', '排序', '更新', '']}>
-        {policies.map((policy) => (
+        {policies.length === 0 ? (
+          <tr>
+            <td colSpan={6}>
+              <Empty>{empty}</Empty>
+            </td>
+          </tr>
+        ) : (
+          policies.map((policy) => (
           <tr key={policy.slug} className="hover:bg-shell">
             <td className="px-4 py-3">{policy.title}</td>
             <td className="px-4 py-3 text-muted">/policy/{policy.slug}</td>
@@ -209,7 +222,8 @@ export function PolicyManager({ policies }: { policies: Policy[] }) {
               </button>
             </td>
           </tr>
-        ))}
+          ))
+        )}
       </Table>
     </div>
   )

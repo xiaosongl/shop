@@ -1,6 +1,6 @@
 import type { Metadata } from 'next'
 import { CheckoutForm } from '@/components/checkout-form'
-import { whatsappNumber } from '@/lib/payments'
+import { localChatReady } from '@/lib/payments'
 import { payableAssets } from '@/lib/wallets'
 
 export const metadata: Metadata = { title: 'Checkout' }
@@ -17,7 +17,7 @@ export default async function CheckoutPage() {
         networkLabel,
         pegged,
       }))}
-      whatsappReady={!!whatsappNumber()}
+      whatsappReady={localChatReady()}
     />
   )
 }

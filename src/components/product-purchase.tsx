@@ -1,8 +1,12 @@
 'use client'
 
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useMemo, useState, useTransition } from 'react'
 import { useCart } from '@/lib/cart'
+import { formatPrice } from '@/lib/format'
+import { DEFAULT_GRADE, GRADE_KEYS, GRADES, gradePrices, inquireGrade, type GradeKey } from '@/lib/grades'
+import { inquireLink } from '@/lib/payments'
 
 export type PurchaseVariant = {
   id: string
@@ -12,10 +16,24 @@ export type PurchaseVariant = {
   stock: number
 }
 
-export function ProductPurchase({ variants }: { variants: PurchaseVariant[] }) {
+export function ProductPurchase({
+  variants,
+  slug,
+  title,
+  priceCents,
+  compareAtCents,
+}: {
+  variants: PurchaseVariant[]
+  slug: string
+  title: string
+  priceCents: number
+  compareAtCents: number | null
+}) {
   const cart = useCart()
   const router = useRouter()
   const [pending, startTransition] = useTransition()
+  const prices = gradePrices(priceCents)
+  const [grade, setGrade] = useState<GradeKey>(DEFAULT_GRADE)
 
   const colors = useMemo(() => {
     const map = new Map<string, string>()
@@ -37,22 +55,28 @@ export function ProductPurchase({ variants }: { variants: PurchaseVariant[] }) {
   )
 
   const [sizeId, setSizeId] = useState<string | null>(null)
-  const [added, setAdded] = useState(false)
+
+  // 包这类只有一个在售尺码时（几乎全是 OS）不必再点一次。
+  // 多码仍要用户自己选，避免默默下错号。
+  const inStock = sizes.filter((variant) => variant.stock > 0)
+  const resolvedSizeId = sizeId ?? (inStock.length === 1 ? inStock[0].id : null)
 
   const selected = sizes.length
-    ? (sizes.find((variant) => variant.id === sizeId) ?? null)
+    ? (sizes.find((variant) => variant.id === resolvedSizeId) ?? null)
     : (variants.find((variant) => (color ? variant.color === color : true)) ?? null)
 
   const needsSize = sizes.length > 0 && !selected
   const soldOut = selected != null && selected.stock === 0
   const lowStock = selected != null && selected.stock > 0 && selected.stock <= 3
-  const blocked = needsSize || soldOut
+  const inquire = inquireGrade(grade)
+  const blocked = !inquire && (needsSize || soldOut)
+  const price = prices[grade]
+  const onSale = !inquire && grade === 'premium' && compareAtCents != null && compareAtCents > priceCents
+  const chat = inquireLink(title, `/p/${slug}`)
 
   const onAdd = () => {
-    if (!selected || selected.stock === 0) return
-    cart.add(selected.id)
-    setAdded(true)
-    window.setTimeout(() => setAdded(false), 2000)
+    if (inquire || !selected || selected.stock === 0) return
+    cart.add(selected.id, 1, grade)
   }
 
   /**
@@ -62,12 +86,21 @@ export function ProductPurchase({ variants }: { variants: PurchaseVariant[] }) {
    */
   const onBuyNow = () => {
     if (!selected || selected.stock === 0) return
-    cart.add(selected.id)
+    cart.add(selected.id, 1, grade, false)
     startTransition(() => router.push('/checkout'))
   }
 
   return (
     <div className="mt-8 space-y-7">
+      <p className="flex items-baseline gap-3">
+        <span className={`text-lg ${onSale ? 'text-sale' : ''}`}>
+          {price == null ? 'Contact us' : formatPrice(price)}
+        </span>
+        {onSale && (
+          <span className="text-sm text-faint line-through">{formatPrice(compareAtCents!)}</span>
+        )}
+      </p>
+
       {colors.length > 0 && (
         <div>
           <p className="label-xs text-faint">
@@ -98,6 +131,43 @@ export function ProductPurchase({ variants }: { variants: PurchaseVariant[] }) {
         </div>
       )}
 
+      <div>
+        <div className="flex items-baseline justify-between gap-3">
+          <p className="label-xs text-faint">Grade</p>
+          <Link
+            href={`/grades?from=${encodeURIComponent(`/p/${slug}`)}`}
+            className="text-xs text-faint underline-offset-2 hover:text-ink hover:underline"
+          >
+            Compare grades
+          </Link>
+        </div>
+        <div className="mt-3 grid gap-2">
+          {GRADE_KEYS.map((key) => {
+            const option = GRADES[key]
+            const active = grade === key
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setGrade(key)}
+                aria-pressed={active}
+                className={`flex items-baseline justify-between gap-4 border px-3 py-3 text-left transition-colors ${
+                  active ? 'border-ink' : 'border-line hover:border-ink'
+                }`}
+              >
+                <span>
+                  <span className="block text-sm">{option.label}</span>
+                  <span className="mt-0.5 block text-xs text-muted">{option.blurb}</span>
+                </span>
+                <span className="shrink-0 text-sm tabular-nums">
+                  {prices[key] == null ? 'Contact us' : formatPrice(prices[key])}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
       {sizes.length > 0 && (
         <div>
           <p className="label-xs text-faint">Size</p>
@@ -105,7 +175,7 @@ export function ProductPurchase({ variants }: { variants: PurchaseVariant[] }) {
           <div className="mt-3 grid grid-cols-[repeat(auto-fill,minmax(3.5rem,1fr))] gap-2">
             {sizes.map((variant) => {
               const out = variant.stock === 0
-              const active = variant.id === sizeId
+              const active = variant.id === resolvedSizeId
               return (
                 <button
                   key={variant.id}
@@ -129,23 +199,40 @@ export function ProductPurchase({ variants }: { variants: PurchaseVariant[] }) {
       )}
 
       <div>
-        <button
-          type="button"
-          onClick={onAdd}
-          disabled={blocked}
-          className="label-xs w-full bg-ink py-4 text-white transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:bg-line disabled:text-muted"
-        >
-          {added ? 'Added to bag' : soldOut ? 'Sold out' : needsSize ? 'Select a size' : 'Add to bag'}
-        </button>
+        {inquire ? (
+          chat ? (
+            <a
+              href={chat}
+              target="_blank"
+              rel="noreferrer"
+              className="label-xs block w-full bg-ink py-4 text-center text-white transition-opacity hover:opacity-85"
+            >
+              Contact us
+            </a>
+          ) : (
+            <p className="text-center text-sm text-muted">Message us to ask about this bag.</p>
+          )
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={onAdd}
+              disabled={blocked}
+              className="label-xs w-full bg-ink py-4 text-white transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:bg-line disabled:text-muted"
+            >
+              {soldOut ? 'Sold out' : needsSize ? 'Select a size' : 'Add to bag'}
+            </button>
 
-        <button
-          type="button"
-          onClick={onBuyNow}
-          disabled={blocked || pending}
-          className="label-xs mt-2.5 w-full border border-ink py-4 transition-colors hover:bg-ink hover:text-white disabled:cursor-not-allowed disabled:border-line disabled:text-muted disabled:hover:bg-transparent"
-        >
-          {pending ? 'Taking you to checkout…' : 'Buy it now'}
-        </button>
+            <button
+              type="button"
+              onClick={onBuyNow}
+              disabled={blocked || pending}
+              className="label-xs mt-2.5 w-full border border-ink py-4 transition-colors hover:bg-ink hover:text-white disabled:cursor-not-allowed disabled:border-line disabled:text-muted disabled:hover:bg-transparent"
+            >
+              {pending ? 'Taking you to checkout…' : 'Buy it now'}
+            </button>
+          </>
+        )}
 
         <p className="mt-3 h-4 text-center text-xs text-muted">
           {lowStock && `Only ${selected!.stock} left`}

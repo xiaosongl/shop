@@ -7,9 +7,9 @@ import { ASSETS, type Asset } from './crypto'
 // 顺序即默认：结算页取 payable[0] 当预选项，所以本地支付放在最前面。
 export const PAYMENT_METHODS = {
   whatsapp: {
-    label: 'Local payment · WhatsApp',
+    label: 'Local payment · WhatsApp / Messenger',
     // 得把收款方式写明白：大多数客人不碰虚拟币，看不到"能刷卡"就直接走了
-    note: 'Pay by credit card, PayPal, or your usual local wallet. We send you an invoice on WhatsApp and confirm the order by hand once payment lands.',
+    note: 'Pay by credit card, PayPal, or your usual local wallet. Message us on WhatsApp or Messenger — we send an invoice and confirm the order by hand once payment lands.',
   },
   crypto: {
     label: 'Cryptocurrency',
@@ -33,6 +33,26 @@ export function whatsappNumber(): string {
 export function whatsappLink(orderNumber: string, amount: string) {
   const text = `Hi, I'd like to pay for order ${orderNumber} (${amount}).`
   return `https://wa.me/${whatsappNumber()}?text=${encodeURIComponent(text)}`
+}
+
+export function inquireLink(title: string, path: string) {
+  const text = `Hi, I'm interested in Authentic pre-owned: ${title} (${path})`
+  const phone = whatsappNumber()
+  return phone ? `https://wa.me/${phone}?text=${encodeURIComponent(text)}` : ''
+}
+
+export function messengerHandle(): string {
+  return (process.env.NEXT_PUBLIC_MESSENGER ?? '').replace(/^@/, '').trim()
+}
+
+export function messengerLink(orderNumber: string, amount: string) {
+  const text = `Hi, I'd like to pay for order ${orderNumber} (${amount}).`
+  return `https://m.me/${messengerHandle()}?text=${encodeURIComponent(text)}`
+}
+
+/** WhatsApp 或 Messenger 配了其中一个，本地支付就能下单 */
+export function localChatReady() {
+  return Boolean(whatsappNumber() || messengerHandle())
 }
 
 /**

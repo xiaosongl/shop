@@ -37,6 +37,13 @@ export const LIMITS = {
   recheck: { hits: 30, windowMs: MINUTE },
   /** 订单号 + 邮箱都对才给看，限流只是别让人拿它当撞库接口 */
   lookup: { hits: 20, windowMs: 10 * MINUTE },
+  /**
+   * 导入抓图会替调用方向外发请求，会话要是被借走，这台机器就成了别人的跳板。
+   * 额度按「一次导入几百个商品、一个商品一次调用」放，正常批量走不到头。
+   */
+  importImages: { hits: 400, windowMs: 10 * MINUTE },
+  /** 货源一键上架会向外站发请求再写库，别让会话被借走时拿它当爬虫 */
+  sourceList: { hits: 20, windowMs: 10 * MINUTE },
 } satisfies Record<string, Limit>
 
 export type Scope = keyof typeof LIMITS

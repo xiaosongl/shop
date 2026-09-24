@@ -2,9 +2,8 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import type { ReactNode } from 'react'
 import { useCart } from '@/lib/cart'
-import { GENDER_SLUGS } from '@/lib/taxonomy'
-import { useCurrentGender } from './site-nav'
 
 /**
  * 手机端底部导航。免税店那类站点的标配：主要入口钉在拇指够得着的地方，
@@ -14,22 +13,15 @@ import { useCurrentGender } from './site-nav'
  */
 export function BottomNav() {
   const pathname = usePathname()
-  const gender = useCurrentGender()
-  const { count, ready } = useCart()
+  const { count, ready, drawerOpen, openCart } = useCart()
 
   const at = (prefix: string) => pathname === prefix || pathname.startsWith(prefix + '/')
 
   const items = [
     { href: '/', label: 'Home', Icon: HomeIcon, active: pathname === '/' },
-    {
-      // 跟着当前性别走：在男装区就留在男装区，其余情况回到女装（GENDER_SLUGS 首位）
-      href: `/${gender}`,
-      label: 'Shop',
-      Icon: GridIcon,
-      active: GENDER_SLUGS.some((slug) => at(`/${slug}`)),
-    },
+    { href: '/brands', label: 'Shop', Icon: GridIcon, active: at('/brands') },
     { href: '/search', label: 'Search', Icon: SearchIcon, active: at('/search') },
-    { href: '/cart', label: 'Cart', Icon: BagIcon, active: at('/cart'), badge: true },
+    { href: '/cart', label: 'Cart', Icon: BagIcon, active: drawerOpen || at('/cart'), badge: true },
     // 访客不注册账号，查单就是他们的「我的」
     { href: '/orders', label: 'Orders', Icon: BoxIcon, active: at('/orders') || at('/order') },
   ]
@@ -43,27 +35,60 @@ export function BottomNav() {
       <ul className="flex">
         {items.map(({ href, label, Icon, active, badge }) => (
           <li key={label} className="flex-1">
-            <Link
-              href={href}
-              aria-current={active ? 'page' : undefined}
-              className={`flex h-14 flex-col items-center justify-center gap-1 transition-colors ${
-                active ? 'text-ink' : 'text-faint'
-              }`}
-            >
-              <span className="relative">
-                <Icon />
-                {badge && ready && count > 0 && (
-                  <span className="absolute -top-1 -right-2 min-w-4 rounded-full bg-ink px-1 text-center text-[10px] leading-4 text-white tabular-nums">
-                    {count > 99 ? '99+' : count}
-                  </span>
-                )}
-              </span>
-              <span className="text-[10px] tracking-[0.04em]">{label}</span>
-            </Link>
+            {label === 'Cart' ? (
+              <button
+                type="button"
+                onClick={openCart}
+                aria-current={active ? 'page' : undefined}
+                className={`flex h-14 w-full flex-col items-center justify-center gap-1 transition-colors ${
+                  active ? 'text-ink' : 'text-faint'
+                }`}
+              >
+                <TabIcon Icon={Icon} label={label} badge={badge} ready={ready} count={count} />
+              </button>
+            ) : (
+              <Link
+                href={href}
+                aria-current={active ? 'page' : undefined}
+                className={`flex h-14 flex-col items-center justify-center gap-1 transition-colors ${
+                  active ? 'text-ink' : 'text-faint'
+                }`}
+              >
+                <TabIcon Icon={Icon} label={label} badge={badge} ready={ready} count={count} />
+              </Link>
+            )}
           </li>
         ))}
       </ul>
     </nav>
+  )
+}
+
+function TabIcon({
+  Icon,
+  label,
+  badge,
+  ready,
+  count,
+}: {
+  Icon: () => ReactNode
+  label: string
+  badge?: boolean
+  ready: boolean
+  count: number
+}) {
+  return (
+    <>
+      <span className="relative">
+        <Icon />
+        {badge && ready && count > 0 && (
+          <span className="absolute -top-1 -right-2 min-w-4 rounded-full bg-ink px-1 text-center text-[10px] leading-4 text-white tabular-nums">
+            {count > 99 ? '99+' : count}
+          </span>
+        )}
+      </span>
+      <span className="text-[10px] tracking-[0.04em]">{label}</span>
+    </>
   )
 }
 

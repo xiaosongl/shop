@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from 'react'
 import { saveWallets } from '@/lib/admin-actions'
+import { FilterInput } from './filter-input'
 import { Card, inputClass } from './ui'
 
 type Wallet = {
@@ -17,6 +18,8 @@ export function WalletForm({ wallets }: { wallets: Wallet[] }) {
   const [pending, startTransition] = useTransition()
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [saved, setSaved] = useState(false)
+  const [query, setQuery] = useState('')
+  const needle = query.trim().toLowerCase()
 
   function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -35,11 +38,26 @@ export function WalletForm({ wallets }: { wallets: Wallet[] }) {
   }
 
   const enabledCount = wallets.filter((wallet) => wallet.enabled).length
+  const visible = new Set(
+    wallets
+      .filter(
+        (wallet) =>
+          !needle ||
+          wallet.coin.toLowerCase().includes(needle) ||
+          wallet.networkLabel.toLowerCase().includes(needle) ||
+          wallet.key.toLowerCase().includes(needle),
+      )
+      .map((wallet) => wallet.key),
+  )
 
   return (
     <form onSubmit={onSubmit} className="max-w-3xl space-y-4">
-      {wallets.map((wallet) => (
-        <Card key={wallet.key} className="p-5">
+      <FilterInput value={query} onChange={setQuery} placeholder="搜索币种或网络" />
+      {needle && visible.size === 0 && <p className="text-sm text-faint">没有匹配的币种</p>}
+      {wallets.map((wallet) => {
+        const hit = visible.has(wallet.key)
+        return (
+        <Card key={wallet.key} className={hit ? 'p-5' : 'hidden'}>
           <div className="flex flex-wrap items-baseline justify-between gap-3">
             <div>
               <h2 className="text-sm">
@@ -74,7 +92,8 @@ export function WalletForm({ wallets }: { wallets: Wallet[] }) {
             <p className="mt-1.5 text-xs text-sale">{errors[wallet.key]}</p>
           )}
         </Card>
-      ))}
+        )
+      })}
 
       <div className="sticky bottom-0 flex items-center gap-4 border-t border-line bg-white py-4">
         <button

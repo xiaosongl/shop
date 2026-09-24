@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { Badge, Card, PageHeader, Stat, Table } from '@/components/admin/ui'
+import { Badge, Card, PageHeader, Search, Stat, Table } from '@/components/admin/ui'
 import { db } from '@/lib/db'
 import { formatPrice } from '@/lib/format'
 import { SETTLED_STATUSES } from '@/lib/order-status'
@@ -46,6 +46,7 @@ export default async function AdminHome() {
       </div>
 
       <h2 className="mt-10 mb-4 text-sm text-faint">最近订单</h2>
+      <Search action="/admin/orders" q="" placeholder="搜索单号、邮箱或姓名" />
       {recent.length === 0 ? (
         <Card className="px-4 py-16 text-center text-sm text-faint">还没有订单</Card>
       ) : (

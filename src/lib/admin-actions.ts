@@ -4,10 +4,22 @@ import { revalidatePath } from 'next/cache'
 import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { z } from 'zod'
-import { ADMIN_COOKIE, createSession, credentialsMatch, isAuthenticated } from './admin-auth'
+import { ADMIN_COOKIE, createSession, getAdminRole, resolveAccount } from './admin-auth'
 import { db } from './db'
+import { fileKey } from './format'
 import { processImage, sniffImage } from './images'
+import { isVideoUrl } from './media'
 import { POLICY_SLUG } from './policy'
+import { fetchGxhyProduct, listingCsv, parseSourceUrl } from './gxhy'
+import {
+  MAX_IMPORT_IMAGES,
+  applyPlan,
+  buildPlan,
+  fetchRemoteImage,
+  stripQuotedPrice,
+  type ImportPlan,
+  type ImportResult,
+} from './product-import'
 import { allow } from './rate-limit'
 import { backfillEmbeddings, dropImageIndex } from './image-search'
 import { ASSET_KEYS, asset } from './crypto'
@@ -25,12 +37,16 @@ const MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 // 一次请求最多这么多张。每张都要跑四档编码，不封顶的话一次提交能占住服务器好几分钟
 const MAX_UPLOAD_FILES = 12
 
-/** 每个写操作前都过一遍。会话失效直接抛，避免误改数据 */
+/** 每个写操作前都过一遍。员工只能看，改数据必须是管理员。 */
 async function requireAuth() {
-  if (!(await isAuthenticated())) throw new Error('UNAUTHORIZED')
+  const role = await getAdminRole()
+  if (!role) throw new Error('UNAUTHORIZED')
+  if (role !== 'admin') throw new Error('FORBIDDEN')
 }
 
-type Upload = { ok: true; files: Buffer[] } | { ok: false; message: string }
+/** 带上原文件名：批量导入要靠它把表格里写的文件名对上真正传来的那张图 */
+type Uploaded = { name: string; buffer: Buffer }
+type Upload = { ok: true; files: Uploaded[] } | { ok: false; message: string }
 
 /**
  * 上传字段的信任边界：张数、体积、真实格式，三样都过了才放进管线。
@@ -51,16 +67,16 @@ async function takeUploads(formData: FormData, field: string): Promise<Upload> {
     return { ok: false, message: `图片不能超过 ${MAX_UPLOAD_BYTES / 1024 / 1024}MB` }
   }
 
-  const buffers: Buffer[] = []
+  const taken: Uploaded[] = []
   for (const file of files) {
     const buffer = Buffer.from(await file.arrayBuffer())
     // 不看 file.type：那是客户端填的，改个扩展名就能糊弄过去
     const sniffed = await sniffImage(buffer)
     if (!sniffed.ok) return { ok: false, message: `${file.name}：${sniffed.message}` }
-    buffers.push(buffer)
+    taken.push({ name: file.name, buffer })
   }
 
-  return { ok: true, files: buffers }
+  return { ok: true, files: taken }
 }
 
 /** 走和种子数据同一条 sharp 管线：四档宽度 WebP + 模糊占位 + 分享卡片图 */
@@ -80,11 +96,12 @@ export async function login(formData: unknown): Promise<{ error?: string }> {
     .safeParse(formData)
   if (!parsed.success) return { error: '请填写账号和密码' }
 
-  if (!credentialsMatch(parsed.data.username, parsed.data.password)) {
+  const role = resolveAccount(parsed.data.username, parsed.data.password)
+  if (!role) {
     return { error: '账号或密码不正确' }
   }
 
-  const session = createSession()
+  const session = createSession(role)
   const store = await cookies()
   store.set(ADMIN_COOKIE, session.value, {
     httpOnly: true,
@@ -197,6 +214,18 @@ const productSchema = z.object({
     .max(100_000_00),
   compareAtCents: z.coerce.number().int().min(0).max(100_000_00).optional(),
   featured: z.coerce.boolean().optional(),
+  videoUrl: z
+    .string()
+    .trim()
+    .max(500)
+    .refine((value) => {
+      try {
+        return new URL(value).protocol === 'https:' && isVideoUrl(value)
+      } catch {
+        return false
+      }
+    }, '填 https 的 mp4 / webm 直链')
+    .optional(),
   colors: z.string().trim().max(500).optional(),
   sizes: z.string().trim().max(500).optional(),
 })
@@ -223,6 +252,7 @@ export async function saveProduct(id: string | null, formData: FormData): Promis
     featured: raw.featured === 'on',
     compareAtCents: raw.compareAtCents === '' ? undefined : raw.compareAtCents,
     details: raw.details === '' ? undefined : raw.details,
+    videoUrl: raw.videoUrl === '' ? undefined : raw.videoUrl,
   })
   if (!parsed.success) return { ok: false, fieldErrors: collectErrors(parsed.error) }
 
@@ -236,7 +266,7 @@ export async function saveProduct(id: string | null, formData: FormData): Promis
   const values = {
     title: data.title,
     slug: data.slug,
-    description: data.description,
+    description: stripQuotedPrice(data.description) || data.description,
     details: data.details ?? null,
     brandId: data.brandId,
     categoryId: data.categoryId,
@@ -245,6 +275,7 @@ export async function saveProduct(id: string | null, formData: FormData): Promis
     priceCents: data.priceCents,
     compareAtCents: data.compareAtCents ?? null,
     featured: data.featured ?? false,
+    videoUrl: data.videoUrl ?? null,
   }
 
   // 先验图再落库：验不过就整个不写，否则商品已经建好了却回一句「图片不合格」，
@@ -259,7 +290,7 @@ export async function saveProduct(id: string | null, formData: FormData): Promis
   await syncVariants(product.id, data.slug, data.colors, data.sizes)
 
   let position = await db.productImage.count({ where: { productId: product.id } })
-  for (const input of uploads.files) {
+  for (const input of uploads.files.map((file) => file.buffer)) {
     // 第一张是主图，其余当特写；只有主图需要分享卡片图
     const processed = await processImage(input, {
       dir: 'uploads',
@@ -291,6 +322,36 @@ export async function saveProduct(id: string | null, formData: FormData): Promis
   return { ok: true, id: product.id }
 }
 
+export async function setProductStatus(
+  id: string,
+  status: unknown,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  await requireAuth()
+  const parsed = z.enum(['DRAFT', 'ACTIVE', 'ARCHIVED']).safeParse(status)
+  if (!parsed.success) return { ok: false, message: '状态不对' }
+
+  await db.product.update({ where: { id }, data: { status: parsed.data } })
+  // 图搜索引只收在售的货，下架或重新上架都得重建
+  dropImageIndex()
+  revalidatePath('/admin/products')
+  revalidatePath('/', 'layout')
+  return { ok: true }
+}
+
+export async function deleteProduct(id: string): Promise<{ ok: true } | { ok: false; message: string }> {
+  await requireAuth()
+
+  const product = await db.product.findUnique({ where: { id }, select: { id: true } })
+  if (!product) return { ok: false, message: '商品不存在' }
+
+  // 图片和规格级联删。历史订单行只是把 variantId 置空，快照标题和价格还在
+  await db.product.delete({ where: { id } })
+  dropImageIndex()
+  revalidatePath('/admin/products')
+  revalidatePath('/', 'layout')
+  return { ok: true }
+}
+
 export async function deleteProductImage(imageId: string) {
   // 只删数据库记录，磁盘文件留着：文件名是内容哈希，同一张图可能被别的商品引用
 
@@ -311,6 +372,130 @@ export async function setVariantStock(variantId: string, stock: unknown) {
   revalidatePath('/admin/products')
   revalidatePath('/', 'layout')
   return { ok: true as const }
+}
+
+// ---------- 批量导入 ----------
+
+/**
+ * 预览。跑的是和真正导入同一个 buildPlan，所以表上看到什么就会写什么。
+ * 只读，不动数据库。
+ */
+export async function previewImport(csv: unknown): Promise<ImportPlan> {
+  await requireAuth()
+  const text = z.string().max(4_000_000).safeParse(csv)
+  if (!text.success) {
+    return { rows: [], issues: [{ line: 0, message: '文件太大或格式不对' }], newBrands: [], categories: [] }
+  }
+  return buildPlan(text.data)
+}
+
+/**
+ * 落库。只写商品、规格和库存，图片不在这一步——抓图慢，几百个商品一次请求做不完。
+ *
+ * 计划在服务端按原始表格重算一遍，不接受前端传回来的那份：
+ * 那份里带着 brandId、categoryId，信了就等于让前端指定往哪张表写。
+ */
+export async function runImport(csv: unknown): Promise<ImportResult> {
+  await requireAuth()
+
+  const text = z.string().max(4_000_000).safeParse(csv)
+  if (!text.success) {
+    return { created: 0, updated: 0, brands: [], issues: [{ line: 0, message: '文件太大或格式不对' }], pending: [] }
+  }
+
+  const result = await applyPlan(await buildPlan(text.data))
+
+  // 图搜索引只收 ACTIVE 的货，导入多半改了上架状态，让它重建一次
+  dropImageIndex()
+  revalidatePath('/admin/products')
+  revalidatePath('/', 'layout')
+  return result
+}
+
+/**
+ * 给一个商品配图。浏览器按 runImport 返回的清单逐个调用，
+ * 每次只做一个商品，请求短，Cloudflare 那 100 秒的上限碰不到。
+ *
+ * 表格里那一格可以是网址，也可以是文件名——文件名对应本次一起选中的本地图片，
+ * 由浏览器随这次请求带上来。厂家给的通常是一个图片文件夹加一张表，
+ * 逼人先把图传到某处换成链接，纯属多一道工序。
+ *
+ * 已经有图的商品直接跳过，所以中断后重来能接着走，不会堆出重复图。
+ */
+export async function importProductImages(
+  formData: FormData,
+): Promise<{ ok: boolean; added: number; message?: string }> {
+  await requireAuth()
+  if (!(await allow('importImages'))) {
+    return { ok: false, added: 0, message: '配图太频繁，等几分钟再继续' }
+  }
+
+  const parsed = z
+    .object({
+      slug: z.string().min(1).max(120),
+      // 保留表格里的原始顺序，第一张就是主图，混着填网址和文件名也不会乱
+      sources: z.array(z.string().max(2000)).max(MAX_IMPORT_IMAGES),
+    })
+    .safeParse({
+      slug: formData.get('slug'),
+      sources: JSON.parse(String(formData.get('sources') ?? '[]')),
+    })
+  if (!parsed.success) return { ok: false, added: 0, message: '参数不对' }
+
+  // 本地图走和后台手动上传同一道门：张数、体积、真实字节格式
+  const uploads = await takeUploads(formData, 'files')
+  if (!uploads.ok) return { ok: false, added: 0, message: uploads.message }
+  const byName = new Map(uploads.files.map((file) => [fileKey(file.name), file.buffer]))
+
+  const product = await db.product.findUnique({
+    where: { slug: parsed.data.slug },
+    select: { id: true, title: true, _count: { select: { images: true } } },
+  })
+  if (!product) return { ok: false, added: 0, message: '找不到这个商品' }
+  if (product._count.images) return { ok: true, added: 0 }
+
+  let position = 0
+  const failures: string[] = []
+  for (const source of parsed.data.sources) {
+    const local = byName.get(fileKey(source))
+    let buffer: Buffer
+    if (local) {
+      buffer = local
+    } else if (/^https?:\/\//i.test(source)) {
+      const fetched = await fetchRemoteImage(source)
+      if (!fetched.ok) {
+        failures.push(fetched.message)
+        continue
+      }
+      buffer = fetched.buffer
+    } else {
+      failures.push(`没找到图片「${source}」，选图片时把它一起选上`)
+      continue
+    }
+
+    // 第一张是主图，要分享卡片图；其余当特写，和后台手动上传的规则一致
+    const processed = await processImage(buffer, {
+      dir: 'uploads',
+      crop: position === 0 ? 'full' : 'detail',
+      withOg: position === 0,
+    })
+    await db.productImage.create({
+      data: { productId: product.id, ...processed, alt: product.title, position },
+    })
+    position++
+  }
+
+  if (position) {
+    await backfillEmbeddings()
+    revalidatePath('/admin/products')
+    revalidatePath('/', 'layout')
+  }
+
+  return {
+    ok: position > 0,
+    added: position,
+    message: failures.length ? failures[0] : undefined,
+  }
 }
 
 // ---------- 品牌 ----------
@@ -349,7 +534,7 @@ export async function saveBrand(id: string | null, formData: FormData): Promise<
   const uploads = await takeUploads(formData, field.file)
   if (!uploads.ok) return { ok: false, fieldErrors: {}, message: uploads.message }
 
-  const cover = uploads.files[0] ? await ingest(uploads.files[0], false) : null
+  const cover = uploads.files[0] ? await ingest(uploads.files[0].buffer, false) : null
 
   const values = {
     name: data.name,
@@ -442,7 +627,7 @@ export async function saveShowcase(
     const uploads = await takeUploads(formData, field.file)
     if (!uploads.ok) return { ok: false, message: uploads.message }
 
-    const cover = uploads.files[0] ? await ingest(uploads.files[0], key === 'home') : null
+    const cover = uploads.files[0] ? await ingest(uploads.files[0].buffer, key === 'home') : null
     const cleared = formData.get(field.clear) === 'on'
 
     const values = {
@@ -523,6 +708,52 @@ export async function savePolicy(current: string | null, formData: FormData): Pr
   revalidatePath('/admin/policies')
   revalidatePath('/', 'layout')
   return { ok: true, id: data.slug }
+}
+
+export type SourceListResult =
+  | { ok: false; message: string }
+  | { ok: true; id: string; slug: string; title: string; created: boolean; images: string[] }
+
+/** 粘一条共享货源详情链接，抓回来整理成英文后上架。图仍交给浏览器逐张抓。 */
+export async function listFromSource(url: unknown): Promise<SourceListResult> {
+  await requireAuth()
+  if (!(await allow('sourceList'))) return { ok: false, message: '上架太频繁，等几分钟再试' }
+
+  const parsed = z.string().trim().min(1).max(2000).safeParse(url)
+  if (!parsed.success) return { ok: false, message: '把货源链接贴进来' }
+
+  const ref = parseSourceUrl(parsed.data)
+  if ('error' in ref) return { ok: false, message: ref.error }
+
+  const listing = await fetchGxhyProduct(ref)
+  if ('error' in listing) return { ok: false, message: listing.error }
+
+  const plan = await buildPlan(listingCsv(listing))
+  if (!plan.rows.length) {
+    return { ok: false, message: plan.issues[0]?.message ?? '整理不出这件商品' }
+  }
+
+  const result = await applyPlan(plan)
+  if (!result.created && !result.updated) {
+    return { ok: false, message: result.issues[0]?.message ?? '写入失败' }
+  }
+
+  const slug = plan.rows[0].values.slug
+  const product = await db.product.findUnique({ where: { slug }, select: { id: true } })
+  if (!product) return { ok: false, message: '写进去了但找不到商品' }
+
+  dropImageIndex()
+  revalidatePath('/admin/products')
+  revalidatePath('/', 'layout')
+
+  return {
+    ok: true,
+    id: product.id,
+    slug,
+    title: plan.rows[0].values.title,
+    created: result.created > 0,
+    images: result.pending[0]?.images ?? [],
+  }
 }
 
 export async function deletePolicy(slug: string): Promise<{ ok: boolean; message?: string }> {

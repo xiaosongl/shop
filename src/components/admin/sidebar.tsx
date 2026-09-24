@@ -5,24 +5,25 @@ import { usePathname } from 'next/navigation'
 import { logout } from '@/lib/admin-actions'
 
 const LINKS = [
-  { href: '/admin', label: '概览' },
-  { href: '/admin/orders', label: '订单' },
-  { href: '/admin/products', label: '商品' },
-  { href: '/admin/brands', label: '品牌' },
-  { href: '/admin/appearance', label: '站点文案' },
-  { href: '/admin/policies', label: '政策条款' },
-  { href: '/admin/payments', label: '收款配置' },
-]
+  { href: '/admin', label: '概览', roles: ['admin', 'staff'] },
+  { href: '/admin/orders', label: '订单', roles: ['admin', 'staff'] },
+  { href: '/admin/products', label: '商品', roles: ['admin', 'staff'] },
+  { href: '/admin/brands', label: '品牌', roles: ['admin'] },
+  { href: '/admin/appearance', label: '站点文案', roles: ['admin'] },
+  { href: '/admin/policies', label: '政策条款', roles: ['admin'] },
+  { href: '/admin/payments', label: '收款配置', roles: ['admin'] },
+] as const
 
-export function AdminSidebar() {
+export function AdminSidebar({ role }: { role: 'admin' | 'staff' }) {
   const pathname = usePathname()
+  const links = LINKS.filter((link) => link.roles.includes(role))
 
   return (
     <aside className="shrink-0 border-line bg-white md:w-52 md:border-r">
       <div className="flex items-center justify-between border-b border-line px-5 py-4 md:block md:py-6">
         <div>
           <p className="text-sm font-medium tracking-[0.18em] uppercase">Northsound</p>
-          <p className="mt-0.5 text-xs text-faint">后台管理</p>
+          <p className="mt-0.5 text-xs text-faint">{role === 'staff' ? '员工' : '后台管理'}</p>
         </div>
         <form action={logout} className="md:hidden">
           <button type="submit" className="text-xs text-faint hover:text-ink">
@@ -32,7 +33,7 @@ export function AdminSidebar() {
       </div>
 
       <nav className="no-scrollbar flex gap-1 overflow-x-auto px-3 py-3 md:flex-col md:px-3 md:py-4">
-        {LINKS.map((link) => {
+        {links.map((link) => {
           const active =
             link.href === '/admin' ? pathname === '/admin' : pathname.startsWith(link.href)
           return (

@@ -143,6 +143,23 @@ async function runCheckout() {
   )
   check('失效 SKU 被剔除', boxed.removed.includes('does-not-exist'))
   check('价格取自数据库', boxed.lines[0]?.unitPriceCents === price, `${boxed.lines[0]?.unitPriceCents}`)
+  check('没写等级当成 Premium', boxed.lines[0]?.grade === 'premium')
+
+  const { gradePrices, productReturnPath } = await import('../src/lib/grades')
+  const priced = gradePrices(price)
+  const exclusive = await resolveCart([{ variantId: variant.id, quantity: 1, grade: 'exclusive' }], 'boxed')
+  const bump = (priced.exclusive ?? 0) - (priced.premium ?? 0)
+  check(
+    'Exclusive = Premium + $90–$150',
+    exclusive.lines[0]?.unitPriceCents === priced.exclusive && bump >= 9000 && bump <= 15000,
+    `${exclusive.lines[0]?.unitPriceCents} bump=${bump}`,
+  )
+  check('二手不标价', priced.preowned === null)
+  const { formatPrice } = await import('../src/lib/format')
+  check('整美元不加 .00', formatPrice(15000) === '$150')
+  check('半刀写成两位', formatPrice(19350) === '$193.50')
+  check('回跳只认商品路径', productReturnPath('/p/abc') === '/p/abc')
+  check('回跳拒外链', productReturnPath('https://evil.example') === null)
   check('带盒不打折', boxed.discountCents === 0 && boxed.totalCents === totalsFor(subtotal, 'boxed').totalCents)
 
   const discreet = await resolveCart([{ variantId: variant.id, quantity: 2 }], 'discreet')
@@ -169,7 +186,11 @@ async function runCheckout() {
   )
   check('数量超上限不清空整车', overflow.lines.length === 1, `${overflow.lines.length} 行`)
   check('超上限的行夹到上限', overflow.lines[0]?.quantity === expected)
-  check('并且告诉前端这行被改过', overflow.clamped.includes(variant.id))
+  check(
+    '并且告诉前端这行被改过',
+    overflow.clamped.includes(`${variant.id}:premium`),
+    overflow.clamped.join(','),
+  )
 
   // 本地存的东西不可信，进程序之前先收敛
   check('数量收敛：超上限', clampQuantity(MAX_QUANTITY + 2) === MAX_QUANTITY)
@@ -280,10 +301,14 @@ async function runCrypto() {
   // 结算页拿 payable[0] 当预选项，所以顺序就是默认值。谁把 crypto 挪回第一位这里就会响。
   const { PAYMENT_METHODS, PAYMENT_METHOD_KEYS } = await import('../src/lib/payments')
   check('默认支付方式是本地支付', PAYMENT_METHOD_KEYS[0] === 'whatsapp', PAYMENT_METHOD_KEYS[0])
-  const local = PAYMENT_METHODS.whatsapp.note
+  const local = PAYMENT_METHODS.whatsapp
   check(
     '本地支付写明了收款方式',
-    /credit card/i.test(local) && /PayPal/i.test(local) && /wallet/i.test(local),
+    /credit card/i.test(local.note) && /PayPal/i.test(local.note) && /wallet/i.test(local.note),
+  )
+  check(
+    '本地支付同时写了 WhatsApp 和 Messenger',
+    /WhatsApp/.test(local.label) && /Messenger/.test(local.label),
   )
 
   // 先把测试要用的币配上，跑完还原
@@ -406,6 +431,7 @@ async function runAdmin() {
     '/admin',
     '/admin/orders',
     '/admin/products',
+    '/admin/products/import',
     '/admin/brands',
     '/admin/appearance',
     '/admin/payments',
@@ -523,6 +549,11 @@ async function runPaging() {
   if (brands <= PAGE_SIZE) {
     check('品牌只有一页时不显示翻页', !(await get('/admin/brands')).includes('下一页'))
   }
+
+  check('订单页有搜索', (await get('/admin/orders')).includes('name="q"'))
+  check('品牌页有搜索', (await get('/admin/brands')).includes('name="q"'))
+  check('政策页有搜索', (await get('/admin/policies')).includes('name="q"'))
+  check('订单搜索翻页带着词', (await get('/admin/orders?q=NS')).includes('name="q"'))
 }
 
 /**
@@ -793,6 +824,204 @@ async function runFulfilment() {
   await db.productVariant.update({ where: { id: variant.id }, data: { stock: variant.stock } })
   const restored = await db.productVariant.findUniqueOrThrow({ where: { id: variant.id } })
   check('测试数据已还原', restored.stock === variant.stock)
+}
+
+/**
+ * 批量导入。三块：CSV 得能扛住描述里的逗号引号换行；表格到落库计划的翻译
+ * 不能把错行放过去；抓远程图是唯一一处「后台粘个网址服务器就去连」的地方，
+ * 内网必须连不出去。
+ */
+async function runImportProducts() {
+  console.log('\n— 批量导入 —')
+
+  const { applyPlan, buildPlan, fetchRemoteImage, parseCsv, slugify } = await import(
+    '../src/lib/product-import'
+  )
+  const { MIN_PRICE_CENTS } = await import('../src/lib/totals')
+
+  // --- CSV ---
+  const table = parseCsv('a,b,c\n1,"逗号, 在引号里",3\n')
+  check('普通分列', table[0].join('|') === 'a|b|c')
+  check('引号里的逗号不分列', table[1][1] === '逗号, 在引号里', table[1][1])
+  check('列数没被撑开', table[1].length === 3, `${table[1].length} 列`)
+
+  const multi = parseCsv('x\n"第一行\n第二行"\n')
+  check('引号里的换行不断行', multi.length === 2 && multi[1][0] === '第一行\n第二行')
+  check('双引号转义', parseCsv('x\n"他说""好"""\n')[1][0] === '他说"好"')
+  check('CRLF 不留回车', parseCsv('a,b\r\n1,2\r\n')[1][1] === '2')
+  // Excel 存 UTF-8 CSV 会加 BOM，不剥掉第一个表头永远匹配不上
+  check('BOM 被剥掉', parseCsv('\ufeffslug,title\na,b\n')[0][0] === 'slug')
+  check('尾部空行被丢掉', parseCsv('a\n1\n\n\n').length === 2)
+  check('全空的文件得到空表', parseCsv('\n \n').length === 0)
+
+  check('标题能生成后缀', slugify('Canvas Weekender 48L') === 'canvas-weekender-48l')
+  check('后缀不留首尾横线', slugify('  —Bag—  ') === 'bag', slugify('  —Bag—  '))
+
+  // --- 计划 ---
+  const category = await db.category.findFirstOrThrow({
+    where: { parentId: { not: null } },
+    select: { slug: true },
+  })
+  const sample = await db.product.findFirstOrThrow({ select: { slug: true } })
+  const head = 'slug,title,description,brand,category,price,stock,images'
+  const plan = async (body: string) => buildPlan(`${head}\n${body}`)
+
+  const good = await plan(`,Smoke Import Bag,一个包,Northwell,${category.slug},129.00,7,`)
+  check('干净的一行能进计划', good.rows.length === 1, JSON.stringify(good.issues))
+  check('后缀按标题生成', good.rows[0]?.values.slug === 'smoke-import-bag')
+  // 表格里的价格是美元，库里是分。这一步错了，整批商品会差 100 倍
+  check('美元换成分', good.rows[0]?.values.priceCents === 12900, `${good.rows[0]?.values.priceCents}`)
+  check('库存读进来了', good.rows[0]?.stock === 7)
+  check('库里没有就是新建', good.rows[0]?.action === 'create')
+  // 已有的品牌不该被当成新品牌，否则每次导入都往品牌页塞重复条目
+  check('已有品牌不算新建', !good.newBrands.some((brand) => brand.slug === 'northwell'))
+
+  const fresh = await plan(`,Smoke Brand New,x,Smoke Atelier,${category.slug},129,,`)
+  check('没见过的品牌会被列出来', fresh.newBrands.length === 1, JSON.stringify(fresh.newBrands))
+  check('新品牌的后缀是规范化过的', fresh.newBrands[0]?.slug === 'smoke-atelier')
+
+  // 品牌 slug 要进网址，纯中文剥完是空的。报「必填」会让人以为格子空着
+  const cnBrand = await plan(`,Smoke CN,x,冷门牌,${category.slug},129,,`)
+  check('纯中文品牌名说得清为什么不行', cnBrand.issues[0]?.message.includes('网址'), cnBrand.issues[0]?.message)
+
+  const dollars = await plan(`,Smoke Price,x,Northwell,${category.slug},"$1,299.50",,`)
+  check('带货币符号和千分位也认', dollars.rows[0]?.values.priceCents === 129950)
+
+  const known = await plan(`${sample.slug},Smoke Update,x,Northwell,${category.slug},129,,`)
+  check('库里已有的后缀算更新', known.rows[0]?.action === 'update')
+
+  const blankStock = await plan(`,Smoke Blank,x,Northwell,${category.slug},129,,`)
+  // 空着的库存格必须是「不改」而不是 0，否则改个描述重传一次仓库就被清零
+  check('库存留空表示不动', blankStock.rows[0]?.stock === null)
+
+  const dup = await plan(
+    `dupe-a,A,x,Northwell,${category.slug},129,,\ndupe-a,B,x,Northwell,${category.slug},129,,`,
+  )
+  check('同名后缀只留一行', dup.rows.length === 1)
+  check('并指出跟哪一行撞了', dup.issues[0]?.message.includes('第 2 行'), dup.issues[0]?.message)
+
+  const cheap = await plan(
+    `,Smoke Cheap,x,Northwell,${category.slug},${(MIN_PRICE_CENTS - 100) / 100},,`,
+  )
+  check('低于运费折扣的价被拦', cheap.rows.length === 0 && cheap.issues.length === 1)
+
+  const badPrice = await plan(`,Smoke Bad,x,Northwell,${category.slug},免费,,`)
+  check('价格读不出就跳过这行', badPrice.rows.length === 0)
+
+  const badCategory = await plan(`,Smoke Cat,x,Northwell,不存在的类目,129,,`)
+  check('类目不存在被拦', badCategory.rows.length === 0)
+  check('并列出可选类目', badCategory.issues[0]?.message.includes(category.slug))
+
+  const noHead = await buildPlan('title,price\nA,1\n')
+  check('表头缺列直接报错', noHead.rows.length === 0 && noHead.issues.length > 0)
+  check('缺的是哪列说清楚', noHead.issues.some((i) => i.message.includes('brand')))
+
+  // 一行坏的不该带走整批，这是批量导入最容易翻车的地方
+  const mixed = await plan(
+    `,Good One,x,Northwell,${category.slug},129,,\n,Bad One,x,Northwell,没这个类目,129,,`,
+  )
+  check('坏行不连累好行', mixed.rows.length === 1 && mixed.issues.length === 1)
+
+  // --- 真的写一遍 ---
+  const slugs = ['smoke-imported-one', 'smoke-imported-two']
+  try {
+    const first = await applyPlan(
+      await plan(
+        `${slugs[0]},Imported One,一个包,Smoke Atelier,${category.slug},129.00,5,\n` +
+          `${slugs[1]},Imported Two,另一个,Smoke Atelier,${category.slug},89.00,3,`,
+      ),
+    )
+    check('两行都建出来了', first.created === 2, JSON.stringify(first.issues))
+
+    const one = await db.product.findUniqueOrThrow({
+      where: { slug: slugs[0] },
+      select: { title: true, priceCents: true, status: true, variants: { select: { stock: true } } },
+    })
+    check('标题价格都落对了', one.title === 'Imported One' && one.priceCents === 12900)
+    // 批量导入的目的是把货铺上架，不填状态就该是在售，否则前台一件都看不见
+    check('不填状态默认在售', one.status === 'ACTIVE', one.status)
+    check('库存写到规格上了', one.variants.every((v) => v.stock === 5), JSON.stringify(one.variants))
+
+    // 品牌是这一趟顺手建的，得真在库里，否则商品挂着一个空外键
+    const brand = await db.brand.findUnique({ where: { slug: 'smoke-atelier' } })
+    check('缺的品牌被建出来了', !!brand)
+
+    // 改个描述重传：不能又插一遍，也不能把仓库数字清零
+    await db.productVariant.updateMany({
+      where: { product: { slug: slugs[0] } },
+      data: { stock: 42 },
+    })
+    const again = await applyPlan(
+      await plan(`${slugs[0]},Imported One,改过的描述,Smoke Atelier,${category.slug},129.00,,`),
+    )
+    check('重传算更新不算新建', again.updated === 1 && again.created === 0)
+    const total = await db.product.count({ where: { slug: { in: slugs } } })
+    check('没有导出重复商品', total === 2, `${total} 个`)
+
+    const kept = await db.product.findUniqueOrThrow({
+      where: { slug: slugs[0] },
+      select: { description: true, variants: { select: { stock: true } } },
+    })
+    check('描述被更新了', kept.description === '改过的描述')
+    check('库存格留空就不动仓库', kept.variants.every((v) => v.stock === 42), JSON.stringify(kept.variants))
+  } finally {
+    await db.product.deleteMany({ where: { slug: { in: slugs } } })
+    await db.brand.deleteMany({ where: { slug: 'smoke-atelier' } })
+  }
+
+  // --- 表格里的文件名要对得上实际选中的图 ---
+  const { fileKey } = await import('../src/lib/format')
+  check('大小写不影响匹配', fileKey('Bag-01.JPG') === fileKey('bag-01.jpg'))
+  // 厂家常常连文件夹一起写，而 input 给的 File.name 只有文件名本身
+  check('带文件夹的写法也对得上', fileKey('图片/bag-01.jpg') === fileKey('bag-01.jpg'))
+  check('Windows 反斜杠也剥掉', fileKey('D:\\货\\bag-01.jpg') === 'bag-01.jpg')
+  check('前后空格不影响', fileKey(' bag-01.jpg ') === 'bag-01.jpg')
+  check('不同的图不会撞到一起', fileKey('bag-01.jpg') !== fileKey('bag-02.jpg'))
+
+  // 发给厂家的模板必须自己能干净导入，不然等于发了个坑
+  const { readFileSync } = await import('node:fs')
+  const template = readFileSync('docs/商品导入模板.csv', 'utf8')
+  const shipped = await buildPlan(template)
+  check('随附的模板零报错', shipped.issues.length === 0, JSON.stringify(shipped.issues))
+  check('模板里每行都配了图', shipped.rows.every((row) => row.images.length > 0))
+  check(
+    '模板同时示范了文件名和网址',
+    shipped.rows.some((row) => row.images.some((s) => !/^https?:/i.test(s))) &&
+      shipped.rows.some((row) => row.images.some((s) => /^https?:/i.test(s))),
+  )
+
+  // --- 抓图这道门 ---
+  const blocked: [string, string][] = [
+    ['file:///etc/passwd', '本地文件'],
+    ['http://127.0.0.1:3000/robots.txt', '回环地址'],
+    ['http://localhost:3000/robots.txt', '解析到回环的域名'],
+    // 云服务器上这个地址能读出实例凭据，是 SSRF 最想去的地方
+    ['http://169.254.169.254/latest/meta-data/', '云元数据接口'],
+    ['http://10.0.0.1/x.jpg', '内网 A 段'],
+    ['http://192.168.1.1/x.jpg', '内网 C 段'],
+    ['http://[::1]/x.jpg', 'IPv6 回环'],
+    ['http://[::ffff:127.0.0.1]/x.jpg', '映射成 IPv6 的回环'],
+    ['ftp://example.com/x.jpg', '非 HTTP 协议'],
+    ['随便写的', '不是网址'],
+  ]
+  for (const [url, name] of blocked) {
+    const got = await fetchRemoteImage(url)
+    check(`挡住${name}`, !got.ok, got.ok ? '竟然放行了' : '')
+  }
+
+  // 外网确实能抓下来，且抓回来仍要过图片嗅探。断网时跳过，不让冲烟依赖外部服务
+  const real = await fetchRemoteImage(
+    'https://images.unsplash.com/photo-1483985988355-763728e1935b?w=400&h=533&fit=crop&fm=jpg',
+  )
+  if (real.ok) {
+    check('外网图片抓得下来', real.buffer.length > 1000, `${real.buffer.length} 字节`)
+  } else {
+    console.log(`[skip] 外网抓图跳过：${real.message}`)
+  }
+
+  // 抓回来的东西不是图就得拒，和后台手动上传同一道门
+  const notImage = await fetchRemoteImage(`${BASE}/robots.txt`)
+  check('抓到非图片不入库', !notImage.ok)
 }
 
 /**
@@ -1167,9 +1396,8 @@ async function runHomeRails() {
   check('桌面端有翻页箭头', home.includes('aria-label="Next featured"'))
   check('翻页箭头不占手机端的位置', /class="hidden gap-1\.5 self-center md:flex"/.test(home))
 
-  // /[性别]/[品牌] 在该性别无货时是 404。首页的品牌栏和顶部导航都在拼这种链接，
-  // 一个字段拼错、或者忘了按性别过滤，就会在首页留下一片死链。
-  const links = [...new Set([...home.matchAll(/href="(\/(?:women|men)\/[a-z0-9-]+)"/g)].map((m) => m[1]))]
+  // 首页品牌墙和顶部导航都链到 /brands/[slug]。没上货的品牌不该出现在这里。
+  const links = [...new Set([...home.matchAll(/href="(\/brands\/[a-z0-9-]+)"/g)].map((m) => m[1]))]
   check('首页有品牌链接可查', links.length > 0, `${links.length} 条`)
   const dead: string[] = []
   for (const href of links) {
@@ -1329,10 +1557,7 @@ async function runLayoutLint() {
   // 女装排在男装前面是刻意定的，全站顺序都跟着 GENDER_SLUGS 走
   check('性别顺序是女前男后', GENDER_SLUGS[0] === 'women', GENDER_SLUGS.join(' '))
   const home = await (await fetch(BASE + '/')).text()
-  const womenAt = home.indexOf('href="/women"')
-  const menAt = home.indexOf('href="/men"')
-  check('首页女士入口排在前', womenAt > -1 && womenAt < menAt, `women@${womenAt} men@${menAt}`)
-  // 手机上两格并排才塞得进首屏，竖着排第二个性别永远要下拉
+  check('首页不按性别分', !home.includes('href="/women"') && !home.includes('href="/men"'))
   check('首页入口手机端并排两格', home.includes('grid grid-cols-2'))
 
   // 商品列表页在手机上是「图左文右」的一行，md 起换回网格。
@@ -1643,6 +1868,7 @@ await runVerification()
 await runPaging()
 await runFulfilment()
 await runReclaim()
+await runImportProducts()
 await runAdmin()
 await runVariants()
 await runShowcase()
@@ -1712,13 +1938,11 @@ async function runSiteText() {
   const restored = await (await fetch(BASE + '/')).text()
   check('填回去又出现', restored.includes('bg-ink py-2 text-center'))
 
-  /* 首页大标题居中，且排在两个性别入口之后：选性别是进站第一件事。
-     不去匹配具体的 padding 类名，那个一调排版就失效，找标题所在的 section 才稳 */
-  // 锚在 <h1> 这个结构上，不锚具体文案：主标题现在归后台管，
-  // 写死内置文案的话运营一改首页这条就开始误报
+  /* 首页大标题居中。品牌墙是进站后的主结果，排在标题下面。 */
   const heroAt = restored.indexOf('<h1')
-  const tilesAt = restored.indexOf('aspect-3/4')
-  check('性别入口排在大标题之前', tilesAt > 0 && heroAt > tilesAt, `入口@${tilesAt} 标题@${heroAt}`)
+  // 页头导航里也有 /brands/ 链接，会排在标题前面。品牌墙是页面里的 h2。
+  const wallAt = restored.indexOf('>Brands</h2>')
+  check('品牌墙排在大标题之后', heroAt > 0 && wallAt > heroAt, `标题@${heroAt} 品牌墙@${wallAt}`)
 
   const opened = restored.lastIndexOf('<section', heroAt)
   const heroTag = restored.slice(opened, restored.indexOf('>', opened) + 1)

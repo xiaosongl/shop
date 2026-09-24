@@ -23,6 +23,8 @@ const CSP = [
   "form-action 'self'",
   // data: 给模糊占位和收款二维码，blob: 给上传前的本地预览
   "img-src 'self' data: blob:",
+  // 详情页视频是供货方的 https 直链，不进我们自己的图床
+  "media-src 'self' https:",
   "font-src 'self' data:",
   "style-src 'self' 'unsafe-inline'",
   `script-src 'self' 'unsafe-inline'${dev ? " 'unsafe-eval'" : ''}`,

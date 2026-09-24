@@ -52,14 +52,14 @@ export const STATUS_LABEL: Record<string, string> = {
   ...ORDER_STATUS_ZH,
   ACTIVE: '在售',
   DRAFT: '草稿',
-  ARCHIVED: '已归档',
+  ARCHIVED: '已下架',
   MEN: '男',
   WOMEN: '女',
   UNISEX: '通用',
   boxed: '带盒带发票',
   discreet: '隐私包装',
   crypto: '加密货币',
-  whatsapp: 'WhatsApp',
+  whatsapp: 'WhatsApp / Messenger',
 }
 
 export function Badge({ value }: { value: string }) {
@@ -91,6 +91,52 @@ export function Table({ head, children }: { head: string[]; children: React.Reac
 
 export function Empty({ children }: { children: React.ReactNode }) {
   return <p className="px-4 py-16 text-center text-sm text-faint">{children}</p>
+}
+
+export function queryFrom(value: string | undefined) {
+  return value?.trim() ?? ''
+}
+
+/** 后台列表共用的搜索条。GET 提交，翻页时靠 Pager 把 q 带着走。 */
+export function Search({
+  action,
+  q,
+  keep,
+  placeholder,
+}: {
+  action: string
+  q: string
+  keep?: Record<string, string | undefined>
+  placeholder: string
+}) {
+  const clear = new URLSearchParams()
+  for (const [key, value] of Object.entries(keep ?? {})) if (value) clear.set(key, value)
+  const clearHref = clear.toString() ? `${action}?${clear}` : action
+
+  return (
+    <form method="get" action={action} className="mb-5 flex flex-wrap items-center gap-2">
+      {Object.entries(keep ?? {}).map(([key, value]) =>
+        value ? <input key={key} type="hidden" name={key} value={value} /> : null,
+      )}
+      <input
+        name="q"
+        defaultValue={q}
+        placeholder={placeholder}
+        className="w-full max-w-sm border border-line bg-white px-3 py-2 text-sm outline-none focus:border-ink"
+      />
+      <button
+        type="submit"
+        className="border border-line bg-white px-3 py-2 text-sm text-muted transition-colors hover:border-ink"
+      >
+        搜索
+      </button>
+      {q ? (
+        <Link href={clearHref} className="text-sm text-faint hover:text-ink">
+          清除
+        </Link>
+      ) : null}
+    </form>
+  )
 }
 
 export const PAGE_SIZE = 20

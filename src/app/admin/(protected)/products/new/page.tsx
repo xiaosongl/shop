@@ -1,8 +1,10 @@
 import Link from 'next/link'
 import { ProductForm } from '@/components/admin/product-form'
+import { assertAdminPage } from '@/lib/admin-auth'
 import { db } from '@/lib/db'
 
 export default async function NewProduct() {
+  await assertAdminPage()
   const [brands, categories] = await Promise.all([
     db.brand.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true } }),
     db.category.findMany({

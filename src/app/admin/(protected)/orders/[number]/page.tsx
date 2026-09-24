@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { OrderActions } from '@/components/admin/order-actions'
 import { Badge, Card, STATUS_LABEL } from '@/components/admin/ui'
+import { getAdminRole } from '@/lib/admin-auth'
 import { asset, isAssetKey } from '@/lib/crypto'
 import { db } from '@/lib/db'
 import { allowedTransitions } from '@/lib/order-status'
@@ -11,6 +12,7 @@ import { formatPrice } from '@/lib/format'
 type Props = { params: Promise<{ number: string }> }
 
 export default async function AdminOrderDetail({ params }: Props) {
+  const role = await getAdminRole()
   const { number } = await params
   const order = await db.order.findUnique({
     where: { number: decodeURIComponent(number) },
@@ -35,17 +37,19 @@ export default async function AdminOrderDetail({ params }: Props) {
         </span>
       </div>
 
-      <OrderActions
-        orderId={order.id}
-        status={order.status}
-        transitions={allowedTransitions(order.status)}
-        paymentMethod={order.paymentMethod}
-        trackingNumber={order.trackingNumber}
-        // 有单号但还挂在待付款，说明自动核验没过，给个手动重核的入口
-        recheckNumber={
-          order.status === 'PENDING' && order.cryptoTxid ? order.number : null
-        }
-      />
+      {role === 'admin' && (
+        <OrderActions
+          orderId={order.id}
+          status={order.status}
+          transitions={allowedTransitions(order.status)}
+          paymentMethod={order.paymentMethod}
+          trackingNumber={order.trackingNumber}
+          // 有单号但还挂在待付款，说明自动核验没过，给个手动重核的入口
+          recheckNumber={
+            order.status === 'PENDING' && order.cryptoTxid ? order.number : null
+          }
+        />
+      )}
 
       <div className="mt-6 grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <Card>

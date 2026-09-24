@@ -1,17 +1,25 @@
 import { BrandManager } from '@/components/admin/brand-manager'
-import { PageHeader, Pager, pageFrom } from '@/components/admin/ui'
+import { PageHeader, Pager, Search, pageFrom, queryFrom } from '@/components/admin/ui'
+import { assertAdminPage } from '@/lib/admin-auth'
 import { db } from '@/lib/db'
 
 export default async function AdminBrands({
   searchParams,
 }: {
-  searchParams: Promise<{ page?: string }>
+  searchParams: Promise<{ q?: string; page?: string }>
 }) {
-  const { page: pageParam } = await searchParams
-  const total = await db.brand.count()
+  await assertAdminPage()
+  const { q, page: pageParam } = await searchParams
+  const query = queryFrom(q)
+  const where = query
+    ? { OR: [{ name: { contains: query } }, { slug: { contains: query } }] }
+    : {}
+
+  const total = await db.brand.count({ where })
   const { page, pages, skip, take } = pageFrom(pageParam, total)
 
   const brands = await db.brand.findMany({
+    where,
     orderBy: [{ position: 'asc' }, { name: 'asc' }],
     skip,
     take,
@@ -29,8 +37,9 @@ export default async function AdminBrands({
   return (
     <>
       <PageHeader title="品牌" count={`共 ${total} 个`} />
-      <BrandManager brands={brands} />
-      <Pager path="/admin/brands" page={page} pages={pages} />
+      <Search action="/admin/brands" q={query} placeholder="搜索品牌名或 slug" />
+      <BrandManager brands={brands} empty={query ? '没有找到品牌' : '还没有品牌'} />
+      <Pager path="/admin/brands" params={{ q: query }} page={page} pages={pages} />
     </>
   )
 }

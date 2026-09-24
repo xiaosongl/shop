@@ -9,20 +9,12 @@ export default function ShopNotFound() {
       <p className="mt-2 text-sm leading-relaxed text-muted">
         It may have sold out or moved. Browse the current collection instead.
       </p>
-      <div className="mt-8 flex gap-3">
-        <Link
-          href="/men"
-          className="bg-ink px-6 py-3 text-sm text-white transition-opacity hover:opacity-85"
-        >
-          Shop men
-        </Link>
-        <Link
-          href="/women"
-          className="border border-line px-6 py-3 text-sm transition-colors hover:border-ink"
-        >
-          Shop women
-        </Link>
-      </div>
+      <Link
+        href="/brands"
+        className="bg-ink px-6 py-3 text-sm text-white transition-opacity hover:opacity-85"
+      >
+        Shop brands
+      </Link>
     </div>
   )
 }

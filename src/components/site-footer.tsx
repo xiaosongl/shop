@@ -2,7 +2,6 @@ import Link from 'next/link'
 import { getPolicyLinks, getShowcases } from '@/lib/queries'
 import { whatsappNumber } from '@/lib/payments'
 import { showcaseText } from '@/lib/showcase'
-import { GENDERS, GENDER_SLUGS } from '@/lib/taxonomy'
 
 export async function SiteFooter() {
   const [showcases, policies] = await Promise.all([getShowcases(), getPolicyLinks()])
@@ -23,11 +22,9 @@ export async function SiteFooter() {
 
           <div className="grid grid-cols-2 gap-8 sm:grid-cols-3">
             <Column title="Shop">
-              {GENDER_SLUGS.map((slug) => (
-                <Item key={slug} href={`/${slug}`}>
-                  {GENDERS[slug].label}
-                </Item>
-              ))}
+              <Item href="/new">New arrivals</Item>
+              <Item href="/brands">Brands</Item>
+              <Item href="/grades">Our grades</Item>
             </Column>
 
             <Column title="Help">

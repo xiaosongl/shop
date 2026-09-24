@@ -8,7 +8,6 @@ import { db } from '@/lib/db'
 import { formatPrice } from '@/lib/format'
 import { productCardArgs } from '@/lib/queries'
 import { absoluteUrl } from '@/lib/site'
-import { GENDERS, genderValues } from '@/lib/taxonomy'
 
 type Props = { params: Promise<{ slug: string }> }
 
@@ -28,6 +27,7 @@ function getProduct(slug: string) {
       details: true,
       priceCents: true,
       compareAtCents: true,
+      videoUrl: true,
       gender: true,
       categoryId: true,
       brand: { select: { name: true, slug: true } },
@@ -79,22 +79,17 @@ export default async function ProductPage({ params }: Props) {
   const product = await getProduct(slug)
   if (!product) notFound()
 
-  // UNISEX 的商品两个入口下都在，面包屑挑 men 只是选个默认落点，不会指向空页
-  const gender = product.gender === 'WOMEN' ? 'women' : 'men'
-
   const related = await db.product.findMany({
     where: {
       categoryId: product.categoryId,
       id: { not: product.id },
       status: 'ACTIVE',
-      gender: { in: genderValues(gender) },
     },
     take: 4,
     orderBy: { featured: 'desc' },
     ...productCardArgs,
   })
 
-  const onSale = product.compareAtCents != null && product.compareAtCents > product.priceCents
   const details = product.details?.split('\n').filter(Boolean) ?? []
   const parent = product.category.parent
   const topCategory = parent ?? product.category
@@ -102,16 +97,16 @@ export default async function ProductPage({ params }: Props) {
   return (
     <div className="mx-auto max-w-7xl px-5 py-6 md:py-10">
       <nav className="label-xs flex flex-wrap items-center gap-2 text-faint">
-        <Link href={`/${gender}`} className="hover:text-ink">
-          {GENDERS[gender].label}
+        <Link href="/brands" className="hover:text-ink">
+          Brands
         </Link>
         <span aria-hidden>/</span>
-        <Link href={`/${gender}/${product.brand.slug}`} className="hover:text-ink">
+        <Link href={`/brands/${product.brand.slug}`} className="hover:text-ink">
           {product.brand.name}
         </Link>
         <span aria-hidden>/</span>
         <Link
-          href={`/${gender}/${product.brand.slug}/${topCategory.slug}`}
+          href={`/brands/${product.brand.slug}/${topCategory.slug}`}
           className="hover:text-ink"
         >
           {topCategory.name}
@@ -125,13 +120,13 @@ export default async function ProductPage({ params }: Props) {
         右栏用固定宽度而不是比例：正文有个舒服的阅读宽度，屏幕再宽也不该跟着涨。
       */}
       <div className="mt-6 gap-10 md:grid md:grid-cols-[minmax(0,1fr)_18rem] lg:grid-cols-[minmax(0,1fr)_24rem] lg:gap-16">
-        <ProductGallery images={product.images} />
+        <ProductGallery images={product.images} videoUrl={product.videoUrl} />
 
         <div className="mt-10 md:mt-0">
           {/* top-28 对齐 sticky 页头的实际高度（公告条 + 导航栏约 97px） */}
           <div className="md:sticky md:top-28">
             <Link
-              href={`/${gender}/${product.brand.slug}`}
+              href={`/brands/${product.brand.slug}`}
               className="label-xs text-faint hover:text-ink"
             >
               {product.brand.name}
@@ -140,20 +135,15 @@ export default async function ProductPage({ params }: Props) {
               {product.title}
             </h1>
 
-            <p className="mt-3 flex items-baseline gap-3">
-              <span className={`text-lg ${onSale ? 'text-sale' : ''}`}>
-                {formatPrice(product.priceCents)}
-              </span>
-              {onSale && (
-                <span className="text-sm text-faint line-through">
-                  {formatPrice(product.compareAtCents!)}
-                </span>
-              )}
-            </p>
-
             <p className="mt-6 text-[15px] leading-relaxed text-muted">{product.description}</p>
 
-            <ProductPurchase variants={product.variants} />
+            <ProductPurchase
+              variants={product.variants}
+              slug={product.slug}
+              title={product.title}
+              priceCents={product.priceCents}
+              compareAtCents={product.compareAtCents}
+            />
 
             {/* 原生 details，不用为一个折叠面板引入客户端组件 */}
             <div className="mt-10 border-t border-line">
