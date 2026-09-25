@@ -40,7 +40,7 @@ async function importContactFromEnv(): Promise<ShowcaseEntry | null> {
 /** 一次取回全部展示位，缺的补空对象，调用方不用到处判 null */
 export async function getShowcases(): Promise<Record<ShowcaseKey, ShowcaseEntry>> {
   const rows = await db.showcase.findMany({ select: showcaseSelect })
-  const byKey = new Map(rows.map((row) => [row.key, row]))
+  const byKey = new Map<string, ShowcaseEntry>(rows.map((row) => [row.key, row]))
   if (!byKey.has('contact')) {
     const seeded = await importContactFromEnv()
     if (seeded) byKey.set('contact', seeded)
