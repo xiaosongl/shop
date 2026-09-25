@@ -299,8 +299,17 @@ async function runCrypto() {
   const { asset } = await import('../src/lib/crypto')
 
   // 结算页拿 payable[0] 当预选项，所以顺序就是默认值。谁把 crypto 挪回第一位这里就会响。
-  const { PAYMENT_METHODS, PAYMENT_METHOD_KEYS } = await import('../src/lib/payments')
+  const { PAYMENT_METHODS, PAYMENT_METHOD_KEYS, readContacts, localChatReady, inquireLink } =
+    await import('../src/lib/payments')
   check('默认支付方式是本地支付', PAYMENT_METHOD_KEYS[0] === 'whatsapp', PAYMENT_METHOD_KEYS[0])
+  const typed = readContacts({ headline: '+1 (202) 555-0143', subhead: '@shop' })
+  check('WhatsApp 只留数字', typed.whatsapp === '12025550143', typed.whatsapp)
+  check('Messenger 去掉 @', typed.messenger === 'shop', typed.messenger)
+  check('两个都空就不能本地支付', !localChatReady(readContacts(null)))
+  check(
+    '只配 Messenger 也能询价',
+    inquireLink({ whatsapp: '', messenger: 'shop' }, 'Bag', '/p/x').startsWith('https://m.me/shop'),
+  )
   const local = PAYMENT_METHODS.whatsapp
   check(
     '本地支付写明了收款方式',

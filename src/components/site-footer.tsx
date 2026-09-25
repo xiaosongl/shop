@@ -1,11 +1,11 @@
 import Link from 'next/link'
 import { getPolicyLinks, getShowcases } from '@/lib/queries'
-import { whatsappNumber } from '@/lib/payments'
+import { readContacts } from '@/lib/payments'
 import { showcaseText } from '@/lib/showcase'
 
 export async function SiteFooter() {
   const [showcases, policies] = await Promise.all([getShowcases(), getPolicyLinks()])
-  const whatsapp = whatsappNumber()
+  const { whatsapp, messenger } = readContacts(showcases.contact)
   const site = showcaseText(showcases.site, 'site')
   const note = showcaseText(showcases.footer, 'footer').headline
 
@@ -32,6 +32,11 @@ export async function SiteFooter() {
               {whatsapp && (
                 <Item href={`https://wa.me/${whatsapp}`} external>
                   WhatsApp us
+                </Item>
+              )}
+              {messenger && (
+                <Item href={`https://m.me/${messenger}`} external>
+                  Messenger
                 </Item>
               )}
             </Column>

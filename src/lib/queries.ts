@@ -1,5 +1,6 @@
 import type { Prisma } from '@/generated/prisma/client'
 import { db } from './db'
+import { readContacts, type ChatContacts } from './payments'
 import {
   EMPTY_SHOWCASE,
   SHOWCASE_KEYS,
@@ -9,15 +10,54 @@ import {
 } from './showcase'
 import { GENDERS, GENDER_SLUGS, genderValues, isGenderSlug, type GenderSlug } from './taxonomy'
 
+const showcaseSelect = {
+  key: true,
+  imageUrl: true,
+  imageBlur: true,
+  headline: true,
+  subhead: true,
+} as const
+
+/**
+ * 老站的客服号写在环境变量里。库里还没有 contact 这一行时抄一次进来，
+ * 之后只认后台。行已经在（哪怕两个都空）就不再抄，不然清空保存会被环境变量填回来。
+ */
+async function importContactFromEnv(): Promise<ShowcaseEntry | null> {
+  const headline = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER?.trim() || null
+  const subhead = process.env.NEXT_PUBLIC_MESSENGER?.trim() || null
+  if (!headline && !subhead) return null
+
+  try {
+    return await db.showcase.create({
+      data: { key: 'contact', headline, subhead },
+      select: showcaseSelect,
+    })
+  } catch {
+    return db.showcase.findUnique({ where: { key: 'contact' }, select: showcaseSelect })
+  }
+}
+
 /** 一次取回全部展示位，缺的补空对象，调用方不用到处判 null */
 export async function getShowcases(): Promise<Record<ShowcaseKey, ShowcaseEntry>> {
-  const rows = await db.showcase.findMany({
-    select: { key: true, imageUrl: true, imageBlur: true, headline: true, subhead: true },
-  })
+  const rows = await db.showcase.findMany({ select: showcaseSelect })
   const byKey = new Map(rows.map((row) => [row.key, row]))
+  if (!byKey.has('contact')) {
+    const seeded = await importContactFromEnv()
+    if (seeded) byKey.set('contact', seeded)
+  }
   return Object.fromEntries(
     SHOWCASE_KEYS.map((key) => [key, byKey.get(key) ?? EMPTY_SHOWCASE]),
   ) as Record<ShowcaseKey, ShowcaseEntry>
+}
+
+/** WhatsApp / Messenger。结算、下单、商品询价各自只要这两个字符串 */
+export async function getContacts(): Promise<ChatContacts> {
+  const row = await db.showcase.findUnique({
+    where: { key: 'contact' },
+    select: { headline: true, subhead: true },
+  })
+  if (row) return readContacts(row)
+  return readContacts(await importContactFromEnv())
 }
 
 /**

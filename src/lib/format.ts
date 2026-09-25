@@ -16,6 +16,11 @@ export function formatPrice(cents: number): string {
   return (cents % 100 === 0 ? usdWhole : usdCents).format(cents / 100)
 }
 
+/** 货源翻译常把换行写成两个字符 \n，展示时还原成真换行 */
+export function breakLines(text: string) {
+  return text.replace(/\\n/g, '\n')
+}
+
 /**
  * 批量导入时用来把「表格里写的文件名」和「实际选中的图片」对上。
  *

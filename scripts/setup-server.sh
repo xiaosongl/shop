@@ -112,12 +112,11 @@ cat <<'DONE'
        NEXT_PUBLIC_SITE_URL  你的正式域名，带 https://
        ALLOWED_HOSTS         同上，只写域名部分，逗号分隔多个
        BACKUP_DOMAINS        备用域名，主域被标红时展示给访客
-       NEXT_PUBLIC_WHATSAPP_NUMBER  客服号，纯数字带国家码
        ADMIN_USERNAME / ADMIN_PASSWORD  后台账号，务必改掉
 
   2. sudo -u shop /opt/shop/scripts/deploy.sh
 
-  3. 上站后进后台 /admin/payments 填收款地址。
+  3. 上站后进后台：站点文案里填 WhatsApp / Messenger，收款配置里填币种地址。
      加密货币地址存数据库不存 .env，因为每个币+链一个地址、要经常改。
      不填地址前台就没有加密货币选项，这是故意的——宁可不能下单，
      也不能让货款打进一个填错的地址。

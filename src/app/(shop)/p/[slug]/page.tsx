@@ -5,8 +5,8 @@ import { ProductCard } from '@/components/product-card'
 import { ProductGallery } from '@/components/product-gallery'
 import { ProductPurchase } from '@/components/product-purchase'
 import { db } from '@/lib/db'
-import { formatPrice } from '@/lib/format'
-import { productCardArgs } from '@/lib/queries'
+import { breakLines, formatPrice } from '@/lib/format'
+import { getContacts, productCardArgs } from '@/lib/queries'
 import { absoluteUrl } from '@/lib/site'
 
 type Props = { params: Promise<{ slug: string }> }
@@ -76,7 +76,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function ProductPage({ params }: Props) {
   const { slug } = await params
-  const product = await getProduct(slug)
+  const [product, contacts] = await Promise.all([getProduct(slug), getContacts()])
   if (!product) notFound()
 
   const related = await db.product.findMany({
@@ -135,7 +135,9 @@ export default async function ProductPage({ params }: Props) {
               {product.title}
             </h1>
 
-            <p className="mt-6 text-[15px] leading-relaxed text-muted">{product.description}</p>
+            <p className="mt-6 text-[15px] leading-relaxed whitespace-pre-line text-muted">
+              {breakLines(product.description)}
+            </p>
 
             <ProductPurchase
               variants={product.variants}
@@ -143,6 +145,7 @@ export default async function ProductPage({ params }: Props) {
               title={product.title}
               priceCents={product.priceCents}
               compareAtCents={product.compareAtCents}
+              contacts={contacts}
             />
 
             {/* 原生 details，不用为一个折叠面板引入客户端组件 */}

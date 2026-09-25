@@ -11,6 +11,7 @@ import { sniffImage } from './images'
 import { MAX_IMAGE_BYTES } from './vision'
 import { amountFor, asset, isAssetKey } from './crypto'
 import { PAYMENT_METHOD_KEYS, localChatReady, rateCentsFor } from './payments'
+import { getContacts } from './queries'
 import { allow } from './rate-limit'
 import { payableAsset } from './wallets'
 import { GRADES, lineKey, parseGrade, priceFor, type GradeKey } from './grades'
@@ -222,7 +223,7 @@ export async function placeOrder(input: unknown, formData: unknown): Promise<Pla
   if (data.paymentMethod === 'crypto' && !chosen) {
     return { ok: false, fieldErrors: {}, message: 'That payment coin is unavailable right now.' }
   }
-  if (data.paymentMethod === 'whatsapp' && !localChatReady()) {
+  if (data.paymentMethod === 'whatsapp' && !localChatReady(await getContacts())) {
     return { ok: false, fieldErrors: {}, message: 'Local payment is unavailable right now.' }
   }
 

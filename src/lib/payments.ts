@@ -1,9 +1,8 @@
 import { ASSETS, type Asset } from './crypto'
 
-// 这个文件会被结算页的客户端组件引用，所以不能碰 db。
-// 读收款地址在 wallets.ts。
+// 这个文件会被商品页的客户端组件引用，所以不能碰 db。
+// 收款地址在 wallets.ts，WhatsApp / Messenger 存在站点文案的 contact 位，由调用方传进来。
 
-// 这里没有机密：收款地址本来就要公开展示，WhatsApp 号也是 NEXT_PUBLIC_ 的。
 // 顺序即默认：结算页取 payable[0] 当预选项，所以本地支付放在最前面。
 export const PAYMENT_METHODS = {
   whatsapp: {
@@ -25,34 +24,39 @@ export function isPaymentMethod(value: string): value is PaymentMethod {
   return value in PAYMENT_METHODS
 }
 
-export function whatsappNumber(): string {
-  // wa.me 只认纯数字，去掉加号、空格、括号这些
-  return (process.env.NEXT_PUBLIC_WHATSAPP_NUMBER ?? '').replace(/\D/g, '')
+export type ChatContacts = { whatsapp: string; messenger: string }
+
+/** 站点文案里的原文。wa.me 只认纯数字；Messenger 去掉用户手滑加上的 @ */
+export function readContacts(
+  entry?: { headline?: string | null; subhead?: string | null } | null,
+): ChatContacts {
+  return {
+    whatsapp: (entry?.headline ?? '').replace(/\D/g, ''),
+    messenger: (entry?.subhead ?? '').replace(/^@/, '').trim(),
+  }
 }
 
-export function whatsappLink(orderNumber: string, amount: string) {
+export function whatsappLink(phone: string, orderNumber: string, amount: string) {
   const text = `Hi, I'd like to pay for order ${orderNumber} (${amount}).`
-  return `https://wa.me/${whatsappNumber()}?text=${encodeURIComponent(text)}`
+  return `https://wa.me/${phone}?text=${encodeURIComponent(text)}`
 }
 
-export function inquireLink(title: string, path: string) {
-  const text = `Hi, I'm interested in Authentic pre-owned: ${title} (${path})`
-  const phone = whatsappNumber()
-  return phone ? `https://wa.me/${phone}?text=${encodeURIComponent(text)}` : ''
+export function inquireLink(contacts: ChatContacts, title: string, path: string) {
+  const text = `Hi, I'm interested in Pre-owned Authentic: ${title} (${path})`
+  const encoded = encodeURIComponent(text)
+  if (contacts.whatsapp) return `https://wa.me/${contacts.whatsapp}?text=${encoded}`
+  if (contacts.messenger) return `https://m.me/${contacts.messenger}?text=${encoded}`
+  return ''
 }
 
-export function messengerHandle(): string {
-  return (process.env.NEXT_PUBLIC_MESSENGER ?? '').replace(/^@/, '').trim()
-}
-
-export function messengerLink(orderNumber: string, amount: string) {
+export function messengerLink(handle: string, orderNumber: string, amount: string) {
   const text = `Hi, I'd like to pay for order ${orderNumber} (${amount}).`
-  return `https://m.me/${messengerHandle()}?text=${encodeURIComponent(text)}`
+  return `https://m.me/${handle}?text=${encodeURIComponent(text)}`
 }
 
 /** WhatsApp 或 Messenger 配了其中一个，本地支付就能下单 */
-export function localChatReady() {
-  return Boolean(whatsappNumber() || messengerHandle())
+export function localChatReady(contacts: ChatContacts) {
+  return Boolean(contacts.whatsapp || contacts.messenger)
 }
 
 /**

@@ -6,7 +6,7 @@ import { useMemo, useState, useTransition } from 'react'
 import { useCart } from '@/lib/cart'
 import { formatPrice } from '@/lib/format'
 import { DEFAULT_GRADE, GRADE_KEYS, GRADES, gradePrices, inquireGrade, type GradeKey } from '@/lib/grades'
-import { inquireLink } from '@/lib/payments'
+import { inquireLink, type ChatContacts } from '@/lib/payments'
 
 export type PurchaseVariant = {
   id: string
@@ -22,12 +22,14 @@ export function ProductPurchase({
   title,
   priceCents,
   compareAtCents,
+  contacts,
 }: {
   variants: PurchaseVariant[]
   slug: string
   title: string
   priceCents: number
   compareAtCents: number | null
+  contacts: ChatContacts
 }) {
   const cart = useCart()
   const router = useRouter()
@@ -72,7 +74,7 @@ export function ProductPurchase({
   const blocked = !inquire && (needsSize || soldOut)
   const price = prices[grade]
   const onSale = !inquire && grade === 'premium' && compareAtCents != null && compareAtCents > priceCents
-  const chat = inquireLink(title, `/p/${slug}`)
+  const chat = inquireLink(contacts, title, `/p/${slug}`)
 
   const onAdd = () => {
     if (inquire || !selected || selected.stock === 0) return

@@ -15,7 +15,8 @@ import {
   type OrderStatus,
   trackingUrl,
 } from '@/lib/order-status'
-import { messengerHandle, messengerLink, whatsappLink, whatsappNumber } from '@/lib/payments'
+import { messengerLink, whatsappLink } from '@/lib/payments'
+import { getContacts } from '@/lib/queries'
 import { payableAsset } from '@/lib/wallets'
 import { SHIPPING_METHODS, isShippingMethod } from '@/lib/totals'
 
@@ -25,6 +26,7 @@ export const metadata: Metadata = { title: 'Your order' }
 
 export default async function OrderPage({ params }: Props) {
   const { number } = await params
+  const contacts = await getContacts()
   const order = await db.order.findUnique({
     where: { number: decodeURIComponent(number) },
     include: { items: true },
@@ -126,9 +128,9 @@ export default async function OrderPage({ params }: Props) {
             wallet. Your items stay reserved until then.
           </p>
           <div className="mt-6 flex flex-col items-center justify-center gap-2 sm:flex-row">
-            {whatsappNumber() && (
+            {contacts.whatsapp && (
               <a
-                href={whatsappLink(order.number, formatPrice(order.totalCents))}
+                href={whatsappLink(contacts.whatsapp, order.number, formatPrice(order.totalCents))}
                 target="_blank"
                 rel="noreferrer noopener"
                 className="inline-block bg-ink px-8 py-3.5 text-sm text-white transition-opacity hover:opacity-85"
@@ -136,9 +138,9 @@ export default async function OrderPage({ params }: Props) {
                 Open WhatsApp
               </a>
             )}
-            {messengerHandle() && (
+            {contacts.messenger && (
               <a
-                href={messengerLink(order.number, formatPrice(order.totalCents))}
+                href={messengerLink(contacts.messenger, order.number, formatPrice(order.totalCents))}
                 target="_blank"
                 rel="noreferrer noopener"
                 className="inline-block border border-ink px-8 py-3.5 text-sm transition-colors hover:bg-ink hover:text-white"

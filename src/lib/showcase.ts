@@ -1,13 +1,13 @@
 /**
- * 「没有数据表可挂」的文案位：站名、顶部公告、首页主视觉、两个性别入口、页脚备注。
+ * 「没有数据表可挂」的文案位：站名、客服联系方式、顶部公告、首页主视觉、两个性别入口、页脚备注。
  *
  * 每个位置的图和文案都可空，空就用下面的缺省值 + 自动挑的商品图，
- * 所以后台一次都不进也是一个完整可用的站。
+ * 所以后台一次都不进也是一个完整可用的站。联系方式没有缺省：空着就是不显示。
  *
  * 加新位置只要往这里加一个 key 和一条 SHOWCASE_LABELS，
  * 表结构、后台表单、保存逻辑都不用动。
  */
-export const SHOWCASE_KEYS = ['site', 'banner', 'home', 'women', 'men', 'footer'] as const
+export const SHOWCASE_KEYS = ['site', 'contact', 'banner', 'home', 'women', 'men', 'footer'] as const
 
 export type ShowcaseKey = (typeof SHOWCASE_KEYS)[number]
 
@@ -43,7 +43,12 @@ export type ShowcaseMeta = {
   title: string
   hint: string
   headline: string
+  /** 盖过「留空显示缺省文案」。联系方式这种没有缺省的字段用它写格式 */
+  headlineHint?: string
   subhead?: string
+  subheadHint?: string
+  /** 短字段用单行输入。缺省是两行文本框 */
+  subheadLine?: boolean
   image?: string
 }
 
@@ -53,6 +58,15 @@ export const SHOWCASE_LABELS: Record<ShowcaseKey, ShowcaseMeta> = {
     hint: '页头 logo、页脚品牌名、浏览器标签页、分享卡片，全都用它',
     headline: '站点名',
     subhead: '页脚简介',
+  },
+  contact: {
+    title: '联系方式',
+    hint: 'WhatsApp 和 Messenger。页脚、商品询价、结算页的本地支付都读这里，两个都留空则不提供本地支付',
+    headline: 'WhatsApp 号码',
+    headlineHint: '纯数字，带国家码，如 8613800138000。留空则不显示 WhatsApp',
+    subhead: 'Messenger',
+    subheadHint: '主页用户名或数字 ID，不用带 @。留空则不显示 Messenger',
+    subheadLine: true,
   },
   banner: {
     title: '顶部公告条',
@@ -90,8 +104,9 @@ export const SHOWCASE_FALLBACK: Record<ShowcaseKey, { headline: string; subhead:
     headline: 'Northsound',
     subhead: 'Considered clothing, shoes, bags and watches. Built to last, priced honestly.',
   },
-  // 唯一一个没有代码兜底的位置：默认文案由种子写进库（见 DEFAULT_BANNER），
-  // 所以后台清空就是真的关掉。其余位置留空都回退到这里的缺省，不然新站到处是空白。
+  // 留空就是关掉，不能清完又冒出一个号码。
+  contact: { headline: '', subhead: '' },
+  // 出厂文案由种子写进库（见 DEFAULT_BANNER），不写在这里：写在这里的话后台清空又会顶上来。
   banner: { headline: '', subhead: '' },
   home: {
     headline: 'Clothing, shoes, bags and watches from a short list of makers.',

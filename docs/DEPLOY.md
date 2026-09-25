@@ -49,11 +49,10 @@ sudo nano /opt/shop/.env
 | `NEXT_PUBLIC_SITE_URL` | `https://你的域名` | 分享卡片的图片地址会指向 localhost，微信和 WhatsApp 都出不了预览图 |
 | `ALLOWED_HOSTS` | `你的域名,备用域名` | 不限制，别人拿 IP 或野域名就能镜像你的站 |
 | `BACKUP_DOMAINS` | `https://备用1,https://备用2` | 主域被标红时访客没有退路 |
-| `NEXT_PUBLIC_WHATSAPP_NUMBER` | 带国家码纯数字，如 `12025550143` | WhatsApp 支付选项不出现 |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | **务必改掉** | 默认是 `admin` / `admin123`，等于后台不设防 |
 | `ADMIN_SESSION_SECRET` | 已自动生成随机值 | — |
 
-`DATABASE_URL` 保持 `file:./data/shop.db` 不用动。
+`DATABASE_URL` 保持 `file:./data/shop.db` 不用动。WhatsApp 和 Messenger 不写在这里，上线后到后台「站点文案」填；两个都空则结算页没有本地支付。
 
 ## 四、首次部署
 

@@ -67,7 +67,10 @@ export function AppearanceForm({ showcases }: { showcases: Record<ShowcaseKey, S
             <Field
               name={`${key}.headline`}
               label={meta.headline}
-              hint={fallback.headline ? `留空显示「${fallback.headline}」` : undefined}
+              hint={
+                meta.headlineHint ??
+                (fallback.headline ? `留空显示「${fallback.headline}」` : undefined)
+              }
             >
               <input
                 id={`${key}.headline`}
@@ -82,16 +85,28 @@ export function AppearanceForm({ showcases }: { showcases: Record<ShowcaseKey, S
               <Field
                 name={`${key}.subhead`}
                 label={meta.subhead}
-                hint={fallback.subhead ? `留空显示「${fallback.subhead}」` : undefined}
+                hint={
+                  meta.subheadHint ??
+                  (fallback.subhead ? `留空显示「${fallback.subhead}」` : undefined)
+                }
               >
-                <textarea
-                  id={`${key}.subhead`}
-                  name={`${key}.subhead`}
-                  rows={2}
-                  defaultValue={entry.subhead ?? ''}
-                  placeholder={fallback.subhead}
-                  className={inputClass}
-                />
+                {meta.subheadLine ? (
+                  <input
+                    id={`${key}.subhead`}
+                    name={`${key}.subhead`}
+                    defaultValue={entry.subhead ?? ''}
+                    className={inputClass}
+                  />
+                ) : (
+                  <textarea
+                    id={`${key}.subhead`}
+                    name={`${key}.subhead`}
+                    rows={2}
+                    defaultValue={entry.subhead ?? ''}
+                    placeholder={fallback.subhead}
+                    className={inputClass}
+                  />
+                )}
               </Field>
             )}
 

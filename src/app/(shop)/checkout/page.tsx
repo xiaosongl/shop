@@ -1,12 +1,13 @@
 import type { Metadata } from 'next'
 import { CheckoutForm } from '@/components/checkout-form'
 import { localChatReady } from '@/lib/payments'
+import { getContacts } from '@/lib/queries'
 import { payableAssets } from '@/lib/wallets'
 
 export const metadata: Metadata = { title: 'Checkout' }
 
 export default async function CheckoutPage() {
-  const assets = await payableAssets()
+  const [assets, contacts] = await Promise.all([payableAssets(), getContacts()])
 
   return (
     <CheckoutForm
@@ -17,7 +18,7 @@ export default async function CheckoutPage() {
         networkLabel,
         pegged,
       }))}
-      whatsappReady={localChatReady()}
+      whatsappReady={localChatReady(contacts)}
     />
   )
 }
