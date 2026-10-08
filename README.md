@@ -78,3 +78,5 @@ data/            SQLite 数据库（不进 git）
 ## 上线
 
 见 [docs/DEPLOY.md](docs/DEPLOY.md)：GCE + Cloudflare Tunnel，图片走 CDN，源站 IP 不暴露，含防红方案和日常运维命令。
+
+[![CleverCrow](https://img.shields.io/endpoint?url=https://app.clevercrow.io/api/public/badge/xiaosongl/shop)](https://app.clevercrow.io/i/xiaosongl/shop)
